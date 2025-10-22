@@ -5,6 +5,9 @@
  */
 
  / {
+    model = "Zoomies PetCollar with NRF9151";
+	compatible = "petcollar_v2";
+
     chosen {
         ncs,sm-uart = &uart2;
     };
@@ -37,4 +40,12 @@
             low-power-enable;
         };
     };
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpiote {
+	status = "okay";
 };
