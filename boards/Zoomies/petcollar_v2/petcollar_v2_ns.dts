@@ -1,0 +1,12 @@
+/dts-v1/;
+#include <nordic/nrf9151ns_laca.dtsi>
+#include "petcollar_v2-pinctrl.dtsi"
+#include "petcollar_v2-partitioning.dtsi"
+
+/ {
+	chosen {
+		zephyr,flash = &flash0;
+		zephyr,sram = &sram0_ns;
+		zephyr,code-partition = &slot0_ns_partition;
+	};
+};

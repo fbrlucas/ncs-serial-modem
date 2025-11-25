@@ -1,0 +1,7 @@
+board:
+  name: petcollar_v2
+  vendor: Zoomies
+  socs:
+  - name: nrf9151
+    variants:
+    - name: ns
