@@ -1,0 +1,10 @@
+identifier: petcollar_v2/nrf9151/ns
+name: A wearable pet collar with GPS tracking and activity health monitoring
+vendor: Zoomies
+type: mcu
+arch: arm
+ram: 128
+flash: 212
+toolchain:
+  - zephyr
+supported: []
