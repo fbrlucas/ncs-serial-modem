@@ -153,7 +153,7 @@ int lwm2m_carrier_event_handler(const lwm2m_carrier_event_t *event)
 #if defined(CONFIG_SM_CARRIER_AUTO_CONTROL)
 	case LWM2M_CARRIER_EVENT_LTE_LINK_UP:
 		LOG_DBG("LWM2M_CARRIER_EVENT_LTE_LINK_UP");
-		k_work_reschedule(&reconnect_work, SM_UART_RESPONSE_DELAY);
+		k_work_reschedule_for_queue(&sm_work_q, &reconnect_work, SM_UART_RESPONSE_DELAY);
 		break;
 	case LWM2M_CARRIER_EVENT_LTE_LINK_DOWN:
 		LOG_DBG("LWM2M_CARRIER_EVENT_LTE_LINK_DOWN");
@@ -322,7 +322,7 @@ static int do_carrier_appdata_set(enum at_parser_cmd_type, struct at_parser *par
 {
 	if (param_count == 2) {
 		/* enter data mode */
-		return enter_datamode(carrier_datamode_callback);
+		return enter_datamode(carrier_datamode_callback, 0);
 	} else if ((param_count < 2) || (param_count > 5)) {
 		return -EINVAL;
 	}

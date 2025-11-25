@@ -475,7 +475,18 @@ static int api_rx_disable(const struct device *dev)
 
 	LOG_DBG("api_rx_disable");
 
-	data->app_rx_enabled = false;
+	if (!data->app_rx_enabled) {
+		return -EALREADY;
+	}
+	if (!data->rx_active || !data->dtr_state) {
+		data->app_rx_enabled = false;
+		struct uart_event evt = {
+			.type = UART_RX_DISABLED,
+		};
+		user_callback(dev, &evt);
+		return 0;
+	}
+
 	return deactivate_rx(data);
 }
 

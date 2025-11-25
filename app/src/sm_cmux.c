@@ -30,6 +30,9 @@ LOG_MODULE_REGISTER(sm_cmux, CONFIG_SM_LOG_LEVEL);
 
 #define DLCI_TO_INDEX(dlci) ((dlci) - 1)
 #define INDEX_TO_DLCI(index) ((index) + 1)
+#define STOP_DELAY K_MSEC(10)
+
+static void stop_work_fn(struct k_work *work);
 
 static struct {
 	/* UART backend */
@@ -38,8 +41,8 @@ static struct {
 
 	/* CMUX */
 	struct modem_cmux instance;
-	uint8_t cmux_receive_buf[CONFIG_MODEM_CMUX_WORK_BUFFER_SIZE];
-	uint8_t cmux_transmit_buf[CONFIG_MODEM_CMUX_WORK_BUFFER_SIZE];
+	uint8_t cmux_receive_buf[MODEM_CMUX_WORK_BUFFER_SIZE];
+	uint8_t cmux_transmit_buf[MODEM_CMUX_WORK_BUFFER_SIZE];
 
 	/* CMUX channels (Data Link Connection Identifier); index = address - 1 */
 	struct cmux_dlci {
@@ -57,11 +60,10 @@ static struct {
 	struct k_work rx_work;
 
 	/* Outgoing data for AT DLCI. */
-	struct ring_buf tx_rb;
-	uint8_t tx_buffer[CONFIG_SM_CMUX_TX_BUFFER_SIZE];
-	struct k_mutex tx_rb_mutex;
-	struct k_work tx_work;
-
+	struct sm_urc_ctx *urc_ctx;
+	struct k_work_delayable nonblock_tx_work;
+	struct k_work_delayable stop_work;
+	struct k_sem tx_sem;
 } cmux;
 
 static void rx_work_fn(struct k_work *work)
@@ -108,10 +110,14 @@ static void dlci_pipe_event_handler(struct modem_pipe *pipe,
 		 */
 	case MODEM_PIPE_EVENT_OPENED:
 		LOG_INF("DLCI %u%s opened.", dlci->address, is_at ? " (AT)" : "");
+		k_work_schedule_for_queue(&sm_work_q, &cmux.nonblock_tx_work, K_NO_WAIT);
 		break;
 
 	case MODEM_PIPE_EVENT_CLOSED:
 		LOG_INF("DLCI %u%s closed.", dlci->address, is_at ? " (AT)" : "");
+		if (is_at) {
+			k_sem_give(&cmux.tx_sem);
+		}
 		break;
 
 	case MODEM_PIPE_EVENT_RECEIVE_READY:
@@ -121,10 +127,8 @@ static void dlci_pipe_event_handler(struct modem_pipe *pipe,
 		break;
 
 	case MODEM_PIPE_EVENT_TRANSMIT_IDLE:
-		if (is_at &&
-		    cmux.dlcis[cmux.at_channel].instance.state == MODEM_CMUX_DLCI_STATE_OPEN &&
-		    !ring_buf_is_empty(&cmux.tx_rb)) {
-			k_work_submit_to_queue(&sm_work_q, &cmux.tx_work);
+		if (is_at) {
+			k_sem_give(&cmux.tx_sem);
 		}
 		break;
 	}
@@ -134,6 +138,14 @@ static void cmux_event_handler(struct modem_cmux *, enum modem_cmux_event event,
 {
 	if (event == MODEM_CMUX_EVENT_CONNECTED || event == MODEM_CMUX_EVENT_DISCONNECTED) {
 		LOG_INF("CMUX %sconnected.", (event == MODEM_CMUX_EVENT_CONNECTED) ? "" : "dis");
+	}
+	switch (event) {
+	case MODEM_CMUX_EVENT_CONNECTED:
+		break;
+	case MODEM_CMUX_EVENT_DISCONNECTED:
+		/* Return to AT command mode */
+		k_work_reschedule_for_queue(&sm_work_q, &cmux.stop_work, STOP_DELAY);
+		break;
 	}
 }
 
@@ -155,47 +167,29 @@ static void init_dlci(size_t dlci_idx, uint16_t recv_buf_size,
 	modem_pipe_attach(dlci->pipe, dlci_pipe_event_handler, dlci);
 }
 
-static size_t cmux_write(struct modem_pipe *pipe, const uint8_t *data, size_t len)
+static int cmux_write_at_channel_block(const uint8_t *data, size_t *len)
 {
-	size_t sent_len = 0;
-	int ret = 0;
+	size_t sent = 0;
+	int ret;
 
-	while (sent_len < len) {
-		/* Push data to CMUX TX buffer.  */
-		ret = modem_pipe_transmit(pipe, data, len - sent_len);
-		if (ret <= 0) {
-			break;
+	while (sent < *len) {
+		ret = modem_pipe_transmit(cmux.dlcis[cmux.at_channel].pipe, data + sent,
+					  *len - sent);
+		if (ret < 0) {
+			LOG_ERR("DLCI %u (AT) transmit failed (%d).",
+				INDEX_TO_DLCI(cmux.at_channel), ret);
+			return ret;
+		} else if (ret == 0) {
+			if (cmux.dlcis[cmux.at_channel].instance.state !=
+			    MODEM_CMUX_DLCI_STATE_OPEN) {
+				/* Drop URC when pipe is closed */
+				return 0;
+			}
+			/* Pipe TX buffer full. Wait for transmit idle event. */
+			k_sem_take(&cmux.tx_sem, K_FOREVER);
+		} else {
+			sent += ret;
 		}
-		sent_len += ret;
-		data += ret;
-	}
-
-	if (ret < 0) {
-		LOG_DBG("DLCI %u (AT). Sent %u out of %u bytes. (%d)",
-			INDEX_TO_DLCI(cmux.at_channel), sent_len, len, ret);
-	}
-
-	return sent_len;
-}
-
-static void tx_work_fn(struct k_work *work)
-{
-	uint8_t *data;
-	size_t len;
-
-	k_mutex_lock(&cmux.tx_rb_mutex, K_FOREVER);
-
-	do {
-		len = ring_buf_get_claim(&cmux.tx_rb, &data, ring_buf_capacity_get(&cmux.tx_rb));
-		len = cmux_write(cmux.dlcis[cmux.at_channel].pipe, data, len);
-		ring_buf_get_finish(&cmux.tx_rb, len);
-
-	} while (!ring_buf_is_empty(&cmux.tx_rb) && len != 0);
-
-	k_mutex_unlock(&cmux.tx_rb_mutex);
-
-	if (!ring_buf_is_empty(&cmux.tx_rb)) {
-		LOG_DBG("Remaining bytes in TX buffer: %u.", ring_buf_size_get(&cmux.tx_rb));
 	}
 
 	if (cmux.requested_at_channel != UINT_MAX) {
@@ -203,77 +197,87 @@ static void tx_work_fn(struct k_work *work)
 		cmux.requested_at_channel = UINT_MAX;
 		LOG_INF("DLCI %u (AT) updated.", INDEX_TO_DLCI(cmux.at_channel));
 	}
+
+	*len = sent;
+	return 0;
+}
+
+static void nonblock_tx_work_fn(struct k_work *work)
+{
+	uint8_t *data;
+	size_t len;
+	int err;
+	struct sm_urc_ctx *uc = cmux.urc_ctx; /* Take a local copy. */
+
+	if (uc == NULL) {
+		LOG_ERR("No URC context");
+		return;
+	}
+	if (in_datamode()) {
+		/* Do not send URCs in datamode. */
+		return;
+	}
+
+	/* Do not lock the URC mutex. */
+	do {
+		len = ring_buf_get_claim(&uc->rb, &data, ring_buf_capacity_get(&uc->rb));
+		err = cmux_write_at_channel_block(data, &len);
+		ring_buf_get_finish(&uc->rb, len);
+
+	} while (!ring_buf_is_empty(&uc->rb) && !err);
+
+	if (err) {
+		LOG_DBG("URC transmit failed (%d). %d bytes unsent.", err,
+			ring_buf_size_get(&uc->rb));
+	}
 }
 
 static int cmux_write_at_channel_nonblock(const uint8_t *data, size_t len)
 {
 	int ret = 0;
+	struct sm_urc_ctx *uc = cmux.urc_ctx; /* Take a local copy. */
 
-	k_mutex_lock(&cmux.tx_rb_mutex, K_FOREVER);
+	if (uc == NULL) {
+		LOG_ERR("No URC context");
+		return -EFAULT;
+	}
 
-	if (ring_buf_space_get(&cmux.tx_rb) >= len) {
-		ring_buf_put(&cmux.tx_rb, data, len);
+	/* Lock to prevent concurrent writes. */
+	k_mutex_lock(&uc->mutex, K_FOREVER);
+
+	if (ring_buf_space_get(&uc->rb) >= len) {
+		ring_buf_put(&uc->rb, data, len);
 	} else {
-		LOG_WRN("TX buf overflow, dropping %u bytes.", len);
+		LOG_WRN("URC buf overflow, dropping %u bytes.", len);
 		ret = -ENOBUFS;
 	}
 
-	k_mutex_unlock(&cmux.tx_rb_mutex);
+	k_mutex_unlock(&uc->mutex);
 
 	return ret;
 }
 
-static int cmux_write_at_channel_block(const uint8_t *data, size_t len)
+static int cmux_write_at_channel(const uint8_t *data, size_t len, bool urc, k_timeout_t urc_delay)
 {
-	size_t sent = 0;
-	size_t ret;
-	uint8_t *buf;
+	int ret;
 
-	k_mutex_lock(&cmux.tx_rb_mutex, K_FOREVER);
-
-	while (sent < len) {
-		ret = ring_buf_put(&cmux.tx_rb, data + sent, len - sent);
-		sent += ret;
+	/* To process, CMUX needs system work queue to be able to run.
+	 * Send only from Serial Modem work queue to guarantee URC ordering.
+	 */
+	if (k_current_get() == &sm_work_q.thread && !urc) {
+		ret = cmux_write_at_channel_block(data, &len);
 		if (!ret) {
-			/* Buffer full, send partial data. */
-			ret = ring_buf_get_claim(&cmux.tx_rb, &buf,
-						 ring_buf_capacity_get(&cmux.tx_rb));
-			ret = cmux_write(cmux.dlcis[cmux.at_channel].pipe, buf, ret);
-			ring_buf_get_finish(&cmux.tx_rb, ret);
-
-			if (ret == 0) {
-				/* Cannot send and buffers are full.
-				 * Data will be dropped.
-				 */
-				break;
-			}
+			/* Possible waiting URC is delayed for urc_delay. */
+			k_work_reschedule_for_queue(&sm_work_q, &cmux.nonblock_tx_work, urc_delay);
+		}
+	} else {
+		/* In other contexts, we buffer until Serial Modem work queue becomes available. */
+		ret = cmux_write_at_channel_nonblock(data, len);
+		if (!ret) {
+			/* URC is delayed for urc_delay only if it has not been scheduled. */
+			k_work_schedule_for_queue(&sm_work_q, &cmux.nonblock_tx_work, urc_delay);
 		}
 	}
-
-	k_mutex_unlock(&cmux.tx_rb_mutex);
-
-	if (sent < len) {
-		LOG_WRN("TX buf overflow, dropping %u bytes.", len - sent);
-		return -ENOBUFS;
-	}
-
-	return 0;
-}
-
-static int cmux_write_at_channel(const uint8_t *data, size_t len)
-{
-	size_t ret;
-
-	/* CMUX work queue needs to be able to run.
-	 * So, we will send only from Serial Modem work queue.
-	 */
-	if (k_current_get() != &sm_work_q.thread) {
-		ret = cmux_write_at_channel_nonblock(data, len);
-	} else {
-		ret = cmux_write_at_channel_block(data, len);
-	}
-
-	k_work_submit_to_queue(&sm_work_q, &cmux.tx_work);
 
 	return ret;
 }
@@ -311,10 +315,11 @@ void sm_cmux_init(void)
 	cmux.dlci_channel_rx = ATOMIC_INIT(0);
 	k_work_init(&cmux.rx_work, rx_work_fn);
 
-	ring_buf_init(&cmux.tx_rb, sizeof(cmux.tx_buffer), cmux.tx_buffer);
-	k_mutex_init(&cmux.tx_rb_mutex);
-	k_work_init(&cmux.tx_work, tx_work_fn);
+	k_sem_init(&cmux.tx_sem, 1, 1);
+	k_work_init_delayable(&cmux.nonblock_tx_work, nonblock_tx_work_fn);
+	k_work_init_delayable(&cmux.stop_work, stop_work_fn);
 
+	cmux.at_channel = 0;
 	cmux.requested_at_channel = UINT_MAX;
 }
 
@@ -329,7 +334,26 @@ void sm_cmux_uninit(void)
 		for (size_t i = 0; i != ARRAY_SIZE(cmux.dlcis); ++i) {
 			close_pipe(&cmux.dlcis[i].pipe);
 		}
+		sm_at_host_urc_ctx_release(cmux.urc_ctx, SM_URC_OWNER_CMUX);
 	}
+}
+
+static void stop_work_fn(struct k_work *work)
+{
+	int err;
+
+	ARG_UNUSED(work);
+
+	/* Will stop the UART when calling the close_pipe() function. */
+	sm_cmux_uninit();
+
+	err = sm_uart_handler_enable();
+	if (err) {
+		LOG_ERR("Failed to enable UART handler (%d).", err);
+	}
+
+	sm_cmux_init();
+	LOG_INF("Returned to AT command mode.");
 }
 
 static struct cmux_dlci *cmux_get_dlci(enum cmux_channel channel)
@@ -362,11 +386,9 @@ void sm_cmux_release(enum cmux_channel channel, bool fallback)
 {
 	struct cmux_dlci *dlci = cmux_get_dlci(channel);
 
-#if defined(CONFIG_SM_CMUX_AUTOMATIC_FALLBACK_ON_PPP_STOPPAGE)
 	if (channel == CMUX_PPP_CHANNEL && fallback) {
 		cmux.at_channel = 0;
 	}
-#endif
 	modem_pipe_attach(dlci->pipe, dlci_pipe_event_handler, dlci);
 }
 
@@ -388,6 +410,12 @@ static int cmux_start(void)
 		if (!cmux.uart_pipe) {
 			return -ENODEV;
 		}
+	}
+
+	cmux.urc_ctx = sm_at_host_urc_ctx_acquire(SM_URC_OWNER_CMUX);
+	if (!cmux.urc_ctx) {
+		close_pipe(&cmux.uart_pipe);
+		return -EFAULT;
 	}
 
 	ret = modem_cmux_attach(&cmux.instance, cmux.uart_pipe);
@@ -452,4 +480,24 @@ static int handle_at_cmux(enum at_parser_cmd_type cmd_type, struct at_parser *pa
 		ret = -SILENT_AT_CMUX_COMMAND_RET;
 	}
 	return ret;
+}
+
+SM_AT_CMD_CUSTOM(xcmuxcld, "AT#XCMUXCLD", handle_at_cmuxcld);
+static int handle_at_cmuxcld(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+			      uint32_t param_count)
+{
+	if (cmd_type != AT_PARSER_CMD_TYPE_SET || param_count != 1) {
+		return -EINVAL;
+	}
+
+	if (!cmux_is_started() || !cmux.uart_pipe_open) {
+		return -EALREADY;
+	}
+
+	/* Respond before stopping CMUX. */
+	rsp_send_ok();
+	/* Return to AT command mode */
+	k_work_reschedule_for_queue(&sm_work_q, &cmux.stop_work, STOP_DELAY);
+
+	return -SILENT_AT_COMMAND_RET;
 }

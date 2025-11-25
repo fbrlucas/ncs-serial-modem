@@ -212,7 +212,7 @@ Syntax
 * The ``<sec_tag>`` parameter is an integer.
   It indicates to the modem the credential of the security tag to be used for establishing a secure connection.
   It is associated with a credential, that is, a certificate or PSK. The credential should be stored on the modem side beforehand.
-  Note that when ``<role>`` has a value of ``1``, ``<sec_tag>`` can only be used if the :file:`overlay-native_tls.conf` configuration file is used.
+  Note that when ``<role>`` has a value of ``1``, ``<sec_tag>`` is not supported.
 
 * The ``<peer_verify>`` parameter can accept one of the following values:
 
@@ -462,11 +462,6 @@ Syntax
 
     * ``<value>`` is an integer that indicates the packet data network ID to bind to.
 
-  * ``55`` - :c:macro:`AT_SO_TCP_SRV_SESSTIMEO`.
-
-    * ``<value>`` is an integer that indicates the TCP server session inactivity timeout for a socket.
-      It accepts values from the range ``0`` to ``135``, where ``0`` is no timeout and ``135`` is 2 hours, 15 minutes.
-
   * ``61`` - :c:macro:`AT_SO_RAI` (set-only).
     Release Assistance Indication (RAI).
 
@@ -672,7 +667,7 @@ Socket binding #XBIND
 
 The ``#XBIND`` command allows you to bind a socket with a local port.
 
-This command can be used with TCP servers and both UDP clients and servers.
+This command can be used with TCP and UDP and is needed for incoming UDP data, where the remote end targets a particular port.
 
 Set command
 -----------
@@ -784,105 +779,6 @@ Test command
 
 The test command is not supported.
 
-Set listen mode #XLISTEN
-========================
-
-The ``#XLISTEN`` command allows you to put the TCP socket in listening mode for incoming connections.
-
-This command is for TCP servers.
-
-Set command
------------
-
-The set command allows you to put the TCP socket in listening mode for incoming connections.
-
-Syntax
-~~~~~~
-
-::
-
-   #XLISTEN=<handle>
-
-* The ``<handle>`` parameter is an integer that specifies the socket handle returned from ``#XSOCKET`` or ``#XSSOCKET`` commands.
-
-Response syntax
-~~~~~~~~~~~~~~~
-
-There is no response.
-
-Example
-~~~~~~~~
-
-::
-
-   AT#XLISTEN=0
-   OK
-
-Read command
-------------
-
-The read command is not supported.
-
-Test command
-------------
-
-The test command is not supported.
-
-Accept connection #XACCEPT
-==========================
-
-The ``#XACCEPT`` command allows you to accept an incoming connection from a TCP client.
-
-This command is for TCP servers.
-
-Set command
------------
-
-The set command allows you to wait for the TCP client to connect.
-
-Syntax
-~~~~~~
-
-::
-
-   #XACCEPT=<handle>,<timeout>
-
-* The ``<handle>`` parameter is an integer that specifies the socket handle returned from ``#XSOCKET`` or ``#XSSOCKET`` commands.
-
-* The ``<timeout>`` value sets the timeout value in seconds.
-  ``0`` means no timeout, and it makes this request become blocking.
-
-Response syntax
-~~~~~~~~~~~~~~~
-
-::
-
-   #XACCEPT: <handle>,<ip_addr>
-
-* The ``<handle>`` value is an integer.
-  It represents the socket handle of the accepted connection.
-
-* The ``<ip_addr>`` value indicates the IP address of the peer host.
-
-Example
-~~~~~~~~
-
-::
-
-   AT#XACCEPT=0,60
-   #XACCEPT: 0,"192.168.0.2"
-   OK
-
-Read command
-------------
-
-The read command is not supported.
-
-Test command
-------------
-
-The test command is not supported.
-
 Send data #XSEND
 ================
 
@@ -898,46 +794,100 @@ Syntax
 
 ::
 
-   #XSEND=<handle>[,<data>][,<flags>]
+   #XSEND=<handle>,<mode>,<flags>,<data> when ``<mode>``is ``0`` or ``1``
+
+   #XSEND=<handle>,<mode>,<flags>[,<data_len>] when ``<mode>`` is ``2``
 
 * The ``<handle>`` parameter is an integer that specifies the socket handle returned from ``#XSOCKET`` or ``#XSSOCKET`` commands.
 
-* The ``<data>`` parameter is a string that contains the data to be sent.
-  The maximum size of the data is 1024 bytes.
-  When the parameter is not specified, |SM| enters ``sm_data_mode``.
+* The ``<mode>`` parameter specifies the data sending mode:
+
+  * ``0`` - String mode. Data is provided directly in the command as the ``<data>`` parameter.
+  * ``1`` - Hex string mode. Data is provided as a hexadecimal string in the ``<data>`` parameter.
+  * ``2`` - Data mode. |SM| enters ``sm_data_mode`` for data input.
 
 * The ``<flags>`` parameter sets the sending behavior.
-  It can be set to the following value:
+  It can be set to one of the following values:
 
-  * ``512`` - Blocks send operation until the request is acknowledged.
-    The request will not return until the send operation is completed by lower layers, or until the timeout given by the AT_SO_SNDTIMEO socket option, is reached.
+  * ``0`` - No flags set. The request is complete when the data is pushed to the modem buffer.
+  * ``512`` - Blocks send operation until the request is acknowledged by network.
+    The request will not return until the data is pushed to the network, or acknowledged by network (for TCP), or the timeout given by the AT_SO_SNDTIMEO socket option, is reached.
     Valid timeout values are 1 to 600 seconds.
+  * ``8192`` - Send unsolicited ``#XSENDNTF`` notification when the request is acknowledged by network.
+    Unsolicited notification will be sent when the data is pushed to the network, or acknowledged by network (for TCP), or the timeout given by the AT_SO_SNDTIMEO socket option, is reached.
+    Valid timeout values are 1 to 600 seconds.
+    Further sends for the socket are blocked until the unsolicited notification is received.
+
+* The ``<data>`` parameter is required when ``<mode>`` is ``0`` (string mode) or ``1`` (hex string mode).
+  For string mode (``0``), it is a string that contains the data to be sent.
+  For hex string mode (``1``), it is a hexadecimal string representation of the data to be sent.
+  The maximum payload size in hexadecimal string mode is up to 2800 characters (1400 bytes).
+  For large packets, it is recommended to use data mode (``2``) since :ref:`CONFIG_SM_AT_BUF_SIZE <CONFIG_SM_AT_BUF_SIZE>` limits the maximum size of data that can be sent in string or hex string modes.
+  This parameter is not used when ``<mode>`` is ``2`` (data mode).
+
+* The ``<data_len>`` parameter is optional and only used when ``<mode>`` is ``2`` (data mode).
+  It sets the number of bytes to send in data mode.
+  When required number of bytes are sent, the data mode is exited.
+  The termination command :ref:`CONFIG_SM_DATAMODE_TERMINATOR <CONFIG_SM_DATAMODE_TERMINATOR>` is not used in this case.
 
 Response syntax
 ~~~~~~~~~~~~~~~
 
 ::
 
-   #XSEND: <handle>,<size>
+   #XSEND: <handle>,<result_type>,<size>
 
 * The ``<handle>`` value is an integer indicating the socket handle.
 
+* The ``<result_type>`` value is an integer indicating the type of result:
+
+  * ``0`` - Indicates that there are no further notifications.
+  * ``1`` - Indicates that an unsolicited notification will be sent when the network acknowledged send is completed.
+
 * The ``<size>`` value is an integer.
   It represents the actual number of bytes that has been sent.
+
+
+Unsolicited notification
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+For network acknowledged sends (when the ``8192`` flag is used), an unsolicited notification is sent when the send operation is completed.
+
+::
+
+   #XSENDNTF: <handle>,<status>,<size>
+
+* The ``<handle>`` value is an integer indicating the socket handle.
+
+* The ``<status>`` value is an integer indicating the status of the network acknowledged send.
+  It is ``0`` for success or ``-1`` for failure.
+
+* The ``<size>`` value is an integer indicating the size of the data sent.
+
 
 Example
 ~~~~~~~~
 
 ::
 
-   AT#XSEND=0,"Test TCP"
-   #XSEND: 0,8
+   AT#XSEND=0,0,0,"Test TCP"
+   #XSEND: 0,0,8
    OK
 
-   AT#XSEND=1,,512
+   AT#XSEND=0,1,0,"48656C6C6F"
+   #XSEND: 0,0,5
    OK
-   Test datamode with flags
-   +++
+
+   AT#XSEND=1,0,8192,"Test notification"
+   #XSEND: 1,1,17
+   OK
+   #XSENDNTF: 1,0,17
+
+   AT#XSEND=1,2,8192
+   OK
+   Test datamode with flags+++
+   #XDATAMODE: 0
+   #XSENDNTF: 1,0,24
 
 Read command
 ------------
@@ -964,42 +914,59 @@ Syntax
 
 ::
 
-   #XRECV=<handle>,<timeout>[,<flags>]
+   #XRECV=<handle>,<mode>,<flags>,<timeout>[,<data_len>]
 
 * The ``<handle>`` parameter is an integer that specifies the socket handle returned from ``#XSOCKET`` or ``#XSSOCKET`` commands.
 
-* The ``<timeout>`` value sets the timeout value in seconds.
-  When ``0``, it means no timeout, and it makes this request become blocking.
+* The ``<mode>`` parameter specifies the receive mode:
 
-* The ``<flags>`` value sets the receiving behavior based on the BSD socket definition.
+  * ``0`` - Binary mode. Data is received as binary data.
+  * ``1`` - Hex string mode. Data is received as a hexadecimal string representation.
+
+* The ``<flags>`` parameter sets the receiving behavior based on the BSD socket definition.
   It can be set to one of the following values:
 
-  * ``2`` means reading data without removing it from the socket input queue.
-  * ``64`` means overriding the operation to non-blocking.
-  * ``256`` (TCP only) means blocking until the full amount of data can be returned.
+  * ``0`` - No flags set.
+  * ``2`` - Read data without removing it from the socket input queue.
+  * ``64`` - Override the operation to non-blocking.
+  * ``256`` (TCP only) - Block until the full amount of data can be returned.
+
+* The ``<timeout>`` parameter sets the timeout value in seconds.
+  When ``0``, it means no timeout, and it makes this request block indefinitely.
+
+* The ``<data_len>`` parameter is optional and sets the maximum number of bytes to receive.
+  The maximum value is 2048 bytes, which is also the default value when the parameter is omitted.
 
 Response syntax
 ~~~~~~~~~~~~~~~
 
 ::
 
-   #XRECV: <handle>,<size>
+   #XRECV: <handle>,<mode>,<size>
    <data>
 
 * The ``<handle>`` value is an integer indicating the socket handle.
 
+* The ``<mode>`` value is an integer indicating the receive mode used.
+
 * The ``<data>`` value is a string that contains the data being received.
 
 * The ``<size>`` value is an integer that represents the actual number of bytes received.
+  In case of hex string mode, it represents the number of bytes before conversion to hexadecimal format.
 
 Example
 ~~~~~~~~
 
 ::
 
-   AT#XRECV=0,10
-   #XRECV: 0,7
+   AT#XRECV=0,0,0,10
+   #XRECV: 0,0,7
    Test OK
+   OK
+
+   AT#XRECV=0,1,0,10
+   #XRECV: 0,1,5
+   74205A6F63
    OK
 
 Read command
@@ -1027,9 +994,29 @@ Syntax
 
 ::
 
-   #XSENDTO=<handle>,<url>,<port>[,<data>][,<flags>]
+   #XSENDTO=<handle>,<mode>,<flags>,<url>,<port>,<data> when ``<mode>`` is ``0`` or ``1``
+
+   #XSENDTO=<handle>,<mode>,<flags>,<url>,<port>[,<data_len>] when ``<mode>`` is ``2``
 
 * The ``<handle>`` parameter is an integer that specifies the socket handle returned from ``#XSOCKET`` or ``#XSSOCKET`` commands.
+
+* The ``<mode>`` parameter specifies the data sending mode:
+
+  * ``0`` - String mode. Data is provided directly in the command as the ``<data>`` parameter.
+  * ``1`` - Hex string mode. Data is provided as a hexadecimal string in the ``<data>`` parameter.
+  * ``2`` - Data mode. |SM| enters ``sm_data_mode`` for data input.
+
+* The ``<flags>`` parameter sets the sending behavior.
+  It can be set to one of the following values:
+
+  * ``0`` - No flags set. The request is complete when the data is pushed to the modem buffer.
+  * ``512`` - Blocks send operation until the request is acknowledged by network.
+    The request will not return until the data is pushed to the network, or acknowledged by network (for TCP), or the timeout given by the AT_SO_SNDTIMEO socket option, is reached.
+    Valid timeout values are 1 to 600 seconds.
+  * ``8192`` - Send unsolicited ``#XSENDNTF`` notification when the request is acknowledged by network.
+    Unsolicited notification will be sent when the data is pushed to the network, or acknowledged by network (for TCP), or the timeout given by the AT_SO_SNDTIMEO socket option, is reached.
+    Valid timeout values are 1 to 600 seconds.
+    Further sends for the socket are blocked until the unsolicited notification is received.
 
 * The ``<url>`` parameter is a string.
   It indicates the hostname or the IP address of the remote peer.
@@ -1039,37 +1026,71 @@ Syntax
 * The ``<port>`` parameter is an unsigned 16-bit integer (0 - 65535).
   It represents the port of the UDP service on remote peer.
 
-* The ``<data>`` parameter is a string that contains the data to be sent.
-  Its maximum size is 1024 bytes.
-  When the parameter is not specified, |SM| enters ``sm_data_mode``.
+* The ``<data>`` parameter is required when ``<mode>`` is ``0`` (string mode) or ``1`` (hex string mode).
+  For string mode (``0``), it is a string that contains the data to be sent.
+  For hex string mode (``1``), it is a hexadecimal string representation of the data to be sent.
+  The maximum payload size in hexadecimal string mode is up to 2800 characters (1400 bytes).
+  For large packets, it is recommended to use data mode (``2``) since AT parser's memory limits the maximum size of data that can be sent in string or hex string modes.
+  This parameter is not used when ``<mode>`` is ``2`` (data mode).
 
-* The ``<flags>`` parameter sets the sending behavior.
-  It can be set to the following value:
+* The ``<data_len>`` parameter is optional and only used when ``<mode>`` is ``2`` (data mode).
+  It sets the number of bytes to send in data mode.
+  When required number of bytes are sent, the data mode is exited.
+  The termination command :ref:`CONFIG_SM_DATAMODE_TERMINATOR <CONFIG_SM_DATAMODE_TERMINATOR>` is not used in this case.
 
-  * ``512`` - Blocks send operation until the request is acknowledged.
-    The request will not return until the send operation is completed by lower layers, or until the timeout given by the AT_SO_SNDTIMEO socket option, is reached.
-    Valid timeout values are 1 to 600 seconds.
+* UDP packets that exceed 1500 bytes, including headers, may be dropped by the network due to MTU (Maximum Transmission Unit) restrictions.
 
 Response syntax
 ~~~~~~~~~~~~~~~
 
 ::
 
-   #XSENDTO: <handle>,<size>
+   #XSENDTO: <handle>,<result_type>,<size>
 
 * The ``<handle>`` value is an integer indicating the socket handle.
 
+* The ``<result_type>`` value is an integer indicating the type of result:
+
+  * ``0`` - Indicates that there are no further notifications.
+  * ``1`` - Indicates that an unsolicited notification will be sent when the network acknowledged send is completed.
+
 * The ``<size>`` value is an integer.
   It represents the actual number of bytes that has been sent.
+
+Unsolicited notification
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+For network acknowledged sends (when the ``8192`` flag is used), an unsolicited notification is sent when the send operation is completed.
+
+::
+
+   #XSENDNTF: <handle>,<status>,<size>
+
+* The ``<handle>`` value is an integer indicating the socket handle.
+
+* The ``<status>`` value is an integer indicating the status of the network acknowledged send.
+  It is ``0`` for success or ``-1`` for failure.
+
+* The ``<size>`` value is an integer indicating the size of the data sent.
 
 Example
 ~~~~~~~~
 
 ::
 
-   AT#XSENDTO=0,"test.server.com",1234,"Test UDP"
-   #XSENDTO: 0,8
+   AT#XSENDTO=0,0,0,"test.server.com",1234,"Test UDP"
+   #XSENDTO: 0,0,8
    OK
+
+   AT#XSENDTO=0,1,0,"test.server.com",1234,"48656C6C6F"
+   #XSENDTO: 0,0,5
+   OK
+
+   AT#XSENDTO=0,0,8192,"test.server.com",1234,"Test notification"
+   #XSENDTO: 0,1,17
+   OK
+   #XSENDNTF: 0,0,17
+
 
 Read command
 ------------
@@ -1096,32 +1117,44 @@ Syntax
 
 ::
 
-   #XRECVFROM=<handle>,<timeout>[,<flags>]
+   #XRECVFROM=<handle>,<mode>,<flags>,<timeout>[,<data_len>]
 
 * The ``<handle>`` parameter is an integer that specifies the socket handle returned from ``#XSOCKET`` or ``#XSSOCKET`` commands.
 
-* The ``<timeout>`` value sets the timeout value in seconds.
-  When ``0``, it means no timeout, and it makes this request become blocking.
+* The ``<mode>`` parameter specifies the receive mode:
 
-* The ``<flags>`` value sets the receiving behavior based on the BSD socket definition.
+  * ``0`` - Binary mode. Data is received as binary data.
+  * ``1`` - Hex string mode. Data is received as a hexadecimal string representation.
+
+* The ``<flags>`` parameter sets the receiving behavior based on the BSD socket definition.
   It can be set to one of the following values:
 
-  * ``2`` means reading data without removing it from the socket input queue.
-  * ``64`` means overriding the operation to non-blocking.
+  * ``0`` - No flags set.
+  * ``2`` - Read data without removing it from the socket input queue.
+  * ``64`` - Override the operation to non-blocking.
+
+* The ``<timeout>`` parameter sets the timeout value in seconds.
+  When ``0``, it means no timeout, and it makes this request block indefinitely.
+
+* The ``<data_len>`` parameter is optional and sets the maximum number of bytes to receive.
+  The maximum value is 2048 bytes, which is also the default value when the parameter is omitted.
 
 Response syntax
 ~~~~~~~~~~~~~~~
 
 ::
 
-   #XRECVFROM: <handle>,<size>,"<ip_addr>",<port>
+   #XRECVFROM: <handle>,<mode>,<size>,"<ip_addr>",<port>
    <data>
 
 * The ``<handle>`` value is an integer indicating the socket handle.
 
+* The ``<mode>`` value is an integer indicating the receive mode used.
+
 * The ``<data>`` value is a string that contains the data being received.
 
 * The ``<size>`` value is an integer that represents the actual number of bytes received.
+  In case of hex string mode, it represents the number of bytes before conversion to hexadecimal format.
 
 * The ``<ip_addr>`` value is a string that represents the IPv4 or IPv6 address of the remote peer.
 
@@ -1132,9 +1165,14 @@ Example
 
 ::
 
-   AT#XRECVFROM=0,10
-   #XRECVFROM: 0,7,"192.168.1.100",24210
+   AT#XRECVFROM=0,0,0,10
+   #XRECVFROM: 0,0,7,"192.168.1.100",24210
    Test OK
+   OK
+
+   AT#XRECVFROM=0,1,0,10
+   #XRECVFROM: 0,1,7,"192.168.1.100",24210
+   54657374205A4D
    OK
 
 Read command
@@ -1203,6 +1241,9 @@ When the asynchronous socket events are enabled, |SM| sends events as URC notifi
 * For ``POLLERR``, ``POLLHUP``, and ``POLLNVAL`` events, the URC notification is sent only once for each socket.
   No further URC notifications will be sent for the same socket.
 
+.. note::
+   When closing the socket with ``#XCLOSE``, no closure event will be sent.
+
 ::
 
    #XAPOLL: <handle>,<revents>
@@ -1223,6 +1264,7 @@ Example
 
    OK
 
+   // Create a TCP socket and connect to the test server.
    AT#XSOCKET=1,1,0
 
    #XSOCKET: 1,1,6
@@ -1238,9 +1280,9 @@ Example
    #XAPOLL: 1,4
 
    // Send data to the test server, which will echo it back.
-   AT#XSEND=1,"echo"
+   AT#XSEND=1,0,0,"echo"
 
-   #XSEND: 1,4
+   #XSEND: 1,0,4
 
    OK
 
@@ -1249,20 +1291,53 @@ Example
    // Test server sends the data back and closes the connection. POLLIN and POLLHUP events are received.
    #XAPOLL: 1,17
 
-   AT#XRECV=1,1
+   AT#XRECV=1,0,0,1
 
-   #XRECV: 1,4
+   #XRECV: 1,0,4
    echo
    OK
 
+   // Close the TCP socket.
    AT#XCLOSE=1
 
    #XCLOSE: 1,0
 
    OK
 
-   // #XAPOLL: 1,32 (POLLNVAL) is not received here as a closure event POLLHUP was already received.
+   // Create a UDP socket and send network acknowledge data to another test server, which does not echo.
+   AT#XSOCKET=2,2,0
 
+   #XSOCKET: 2,2,17
+
+   OK
+
+   #XAPOLL: 2,4
+
+   AT#XCONNECT=2,"no_echo.test.server.com",1234
+
+   #XCONNECT: 2,1
+
+   OK
+
+   // Send data to the test server with network acknowledged send flag.
+   AT#XSEND=2,0,8192,"no echo"
+
+   #XSEND: 2,1,7
+
+   OK
+
+   #XSENDNTF: 2,0,7  // Unsolicited notification for network acknowledged send.
+
+   #XAPOLL: 2,4
+
+   // Close the UDP socket.
+   AT#XCLOSE=2
+
+   #XCLOSE: 2,0
+
+   OK
+
+   // Stop asynchronous polling.
    AT#XAPOLL=0
 
    OK

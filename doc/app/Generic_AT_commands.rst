@@ -9,34 +9,87 @@ Generic AT commands
 
 This page describes generic AT commands.
 
-|SM| version #XSLMVER
-=====================
+|SM| echo E[0|1]
+================
 
-The ``#XSLMVER`` command return the versions of the |NCS| in which the |SM| application is built.
-It also returns the version of the modem library that |SM| uses to communicate with the modem.
+The ``E`` command enables or disables the AT command echo feature of the |SM| application.
 
 Set command
 -----------
 
-The set command returns the versions of the |NCS| and the modem library.
+The set command enables or disables the AT command echo feature.
+While enabled, the |SM| application echoes back all the characters that are received in the AT command mode.
+
+.. note::
+
+   When working with a terminal, you should disable local echo to avoid double echoing of characters.
 
 Syntax
 ~~~~~~
 
 ::
 
-   #XSLMVER
+   E1 - Enable AT command echo.
+   E0 - Disable AT command echo (default).
+
+Example
+~~~~~~~
+
+Set the AT command echo:
+
+::
+
+   ATE1
+   OK
+
+   AT
+   AT    // Echoed command
+   OK
+
+   ATE0
+   ATE0  // Echoed command
+   OK
+
+   AT
+   OK
+
+Read command
+------------
+
+The read command is not supported.
+
+Test command
+------------
+
+The test command is not supported.
+
+|SM| version #XSMVER
+=====================
+
+The ``#XSMVER`` command return the versions of the |SM| and |NCS| in which the |SM| application is built.
+
+Set command
+-----------
+
+The set command returns the versions of the |SM| and |NCS|.
+
+Syntax
+~~~~~~
+
+::
+
+   #XSMVER
 
 Response syntax
 ~~~~~~~~~~~~~~~
 
 ::
 
-   #XSLMVER: <ncs_version>,<libmodem_version>[,<customer_version>]
+   #XSMVER: <sm_version>,<ncs_version>[,<customer_version>]
+
+The ``<sm_version>`` value is the version of the |SM| application.
 
 The ``<ncs_version>`` value is a string containing the version of the |NCS|.
-
-The ``<libmodem_version>`` value is a string containing the version of the modem library.
 
 The ``<customer_version>`` value is the :ref:`CONFIG_SM_CUSTOMER_VERSION <CONFIG_SM_CUSTOMER_VERSION>` string, if defined.
 
@@ -47,12 +100,19 @@ The following command example reads the versions:
 
 ::
 
-   AT#XSLMVER
-   #XSLMVER: "2.5.0","2.5.0-lte-5ccd2d4dd54c"
+   // Released build
+   AT#XSMVER
+   #XSMVER: "v0.1.0","3.1.99"
    OK
 
-   AT#XSLMVER
-   #XSLMVER: "2.5.99","2.5.0-lte-5ccd2d4dd54c","Onomondo 2.1.0"
+   // Development build
+   AT#XSMVER
+   #XSMVER: "v0.1.0-73-g0c2af8c-dirty","3.1.99"
+   OK
+
+   // Released build with customer version
+   AT#XSMVER
+   #XSMVER: "v0.1.0","3.1.99","Onomondo 2.1.0"
    OK
 
 Read command
@@ -98,7 +158,7 @@ Example
 ::
 
    AT#XCLAC
-   AT#XSLMVER
+   AT#XSMVER
    AT#XSLEEP
    AT#XCLAC
    AT#XSOCKET
@@ -403,111 +463,6 @@ Example
   #XUUID: 50503041-3633-4261-803d-1e2b8f70111a
 
   OK
-
-Read command
-------------
-
-The read command is not supported.
-
-Test command
-------------
-
-The test command is not supported.
-
-Native TLS CMNG #XCMNG
-======================
-
-The ``#XCMNG`` command manages the credentials to support :ref:`CONFIG_SM_NATIVE_TLS <CONFIG_SM_NATIVE_TLS>`, which is activated with the :file:`overlay-native_tls.conf` configuration file.
-This command is similar to the modem ``%CMNG`` command, but it utilizes Zephyr setting storage instead of modem credential storage.
-
-.. note::
-
-   The Zephyr setting storage is unencrypted and accessible through the debug port of the nRF91 Series devices.
-
-Set command
------------
-
-The set command is used for credential storage management.
-The command writes and deletes credentials.
-It can also list the ``sec_tag`` and ``type`` values of existing credentials.
-
-Syntax
-~~~~~~
-
-::
-
-   #XCMNG=<op>[,<sec_tag>[,<type>[,<content>]]]
-
-The ``<op>`` parameter can have the following integer values:
-
-* ``0`` - Write a credential.
-* ``1`` - List credentials.
-* ``3`` - Delete a credential.
-
-The ``<sec_tag>`` parameter can have an integer value ranging between ``0`` and ``2147483647``.
-It is mandatory for *write* and *delete* operations.
-
-The ``<type>`` parameter can have the following integer values:
-
-* ``0`` - Root CA certificate (PEM format)
-* ``1`` - Certificate (PEM format)
-* ``2`` - Private key (PEM format)
-* ``3`` - Pre-shared key (PSK) (ASCII text)
-* ``4`` - PSK identity (ASCII text)
-
-It is mandatory for *write* and *delete* operations.
-
-The ``<content>`` parameter can have the following string values:
-
-* The credential in Privacy Enhanced Mail (PEM) format when ``<type>`` has a value of ``0``, ``1`` or ``2``.
-* The credential in ASCII text when ``<type>`` has a value of ``3`` or ``4``.
-
-It is mandatory for *write* operations.
-
-Example
-~~~~~~~
-
-::
-
-   AT#XCMNG=0,10,0,"-----BEGIN CERTIFICATE-----
-   MIICpTCCAkugAwIBAgIUS+wVM0VsVmpDIV8NTW8N2KEdRdowCgYIKoZIzj0EAwIw
-   gacxCzAJBgNVBAYTAlRXMQ8wDQYDVQQIDAZUYWl3YW4xDzANBgNVBAcMBlRhaXBl
-   aTEWMBQGA1UECgwNTm9yZGljIFRhaXBlaTEOMAwGA1UECwwFU2FsZXMxETAPBgNV
-   BAMMCExhcnJ5IENBMTswOQYJKoZIhvcNAQkBFixsYXJyeS52ZXJ5bG9uZ2xvbmds
-   b25nbG9uZ2xvbmdAbm9yZGljc2VtaS5ubzAeFw0yMDExMTcxMTE3MDlaFw0zMDEx
-   MTUxMTE3MDlaMIGnMQswCQYDVQQGEwJUVzEPMA0GA1UECAwGVGFpd2FuMQ8wDQYD
-   VQQHDAZUYWlwZWkxFjAUBgNVBAoMDU5vcmRpYyBUYWlwZWkxDjAMBgNVBAsMBVNh
-   bGVzMREwDwYDVQQDDAhMYXJyeSBDQTE7MDkGCSqGSIb3DQEJARYsbGFycnkudmVy
-   eWxvbmdsb25nbG9uZ2xvbmdsb25nQG5vcmRpY3NlbWkubm8wWTATBgcqhkjOPQIB
-   BggqhkjOPQMBBwNCAASvk+LcLXwteWokU1In+FQUWkkbQhkpW61u7d0jV1y/eF3Q
-   PTDAoEz//SnU1kIZccAqV64fFrrd2nkXknLCrhtxo1MwUTAdBgNVHQ4EFgQUMYSO
-   cWPI+SQUs1oVatNQvN/F0UowHwYDVR0jBBgwFoAUMYSOcWPI+SQUs1oVatNQvN/F
-   0UowDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiB2IrzpUmQqcUIw
-   OVqOMNAlzR6v4YHlI9InxU01quIRtQIhAOTITnLNuA0r0571SSBKZyrNGzxJxcPO
-   FDkGjew9OVov
-   -----END CERTIFICATE-----"
-
-   OK
-
-   AT#XCMNG=0,11,3,"PSK"
-
-   OK
-
-   AT#XCMNG=0,11,4,"Identity"
-
-   OK
-
-   AT#XCMNG=1
-
-   #XCMNG: 11,4
-   #XCMNG: 11,3
-   #XCMNG: 10,0
-
-   OK
-
-   AT#XCMNG=3,10,0
-
-   OK
 
 Read command
 ------------

@@ -14,6 +14,7 @@
 #include <zephyr/modem/pipe.h>
 #include "sm_uart_handler.h"
 #include "sm_at_host.h"
+#include "sm_util.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(sm_uart_handler, CONFIG_SM_LOG_LEVEL);
@@ -26,8 +27,10 @@ LOG_MODULE_REGISTER(sm_uart_handler, CONFIG_SM_LOG_LEVEL);
 const struct device *const sm_uart_dev = DEVICE_DT_GET(DT_CHOSEN(ncs_sm_uart));
 uint32_t sm_uart_baudrate;
 
-static struct k_work_delayable rx_process_work;
-
+static void rx_process(struct k_work *work);
+static void tx_write_nonblock_fn(struct k_work *);
+static K_WORK_DELAYABLE_DEFINE(rx_process_work, rx_process);
+static K_WORK_DELAYABLE_DEFINE(tx_write_nonblock_work, tx_write_nonblock_fn);
 struct rx_buf_t {
 	atomic_t ref_counter;
 	size_t len;
@@ -50,7 +53,8 @@ struct rx_event_t {
 K_MSGQ_DEFINE(rx_event_queue, sizeof(struct rx_event_t), UART_RX_EVENT_COUNT, 4);
 
 RING_BUF_DECLARE(tx_buf, CONFIG_SM_UART_TX_BUF_SIZE);
-K_MUTEX_DEFINE(mutex_tx_put); /* Protects the tx_buf from multiple writes. */
+
+struct sm_urc_ctx *urc_ctx; /* URC context for handling unsolicited responses. */
 
 enum sm_uart_state {
 	SM_UART_STATE_TX_ENABLED_BIT,
@@ -133,7 +137,8 @@ static int rx_enable(void)
 	struct rx_buf_t *buf;
 	int ret;
 
-	if (atomic_test_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT)) {
+	if (atomic_test_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT) ||
+	    atomic_test_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_DISABLED_BIT)) {
 		return 0;
 	}
 
@@ -166,9 +171,14 @@ static int rx_disable(void)
 	}
 
 	err = uart_rx_disable(sm_uart_dev);
-	if (err) {
+	if (err && err != -EFAULT) {
 		LOG_ERR("UART RX disable failed: %d", err);
 		return err;
+	}
+
+	while (atomic_test_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT)) {
+		/* Wait until RX stopped */
+		k_sleep(K_MSEC(10));
 	}
 
 	return 0;
@@ -186,7 +196,7 @@ static void rx_recovery(void)
 
 	err = rx_enable();
 	if (err) {
-		k_work_schedule(&rx_process_work, K_MSEC(UART_RX_MARGIN_MS));
+		k_work_schedule_for_queue(&sm_work_q, &rx_process_work, K_MSEC(UART_RX_MARGIN_MS));
 	}
 
 	atomic_clear_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_BIT);
@@ -196,10 +206,8 @@ static void rx_process(struct k_work *work)
 {
 #if SM_PIPE
 	/* With pipe, CMUX layer is notified and it requests the data. */
-	if (atomic_test_bit(&sm_pipe.state, SM_PIPE_STATE_INIT_BIT)) {
-		if (atomic_test_bit(&sm_pipe.state, SM_PIPE_STATE_OPEN_BIT)) {
-			modem_pipe_notify_receive_ready(&sm_pipe.pipe);
-		}
+	if (atomic_test_bit(&sm_pipe.state, SM_PIPE_STATE_OPEN_BIT)) {
+		modem_pipe_notify_receive_ready(&sm_pipe.pipe);
 		return;
 	}
 #endif
@@ -288,7 +296,7 @@ static inline void uart_callback_notify_pipe_transmit_idle(void)
 {
 #if SM_PIPE
 	if (atomic_test_bit(&sm_pipe.state, SM_PIPE_STATE_OPEN_BIT)) {
-		k_work_submit(&sm_pipe.notify_transmit_idle);
+		k_work_submit_to_queue(&sm_work_q, &sm_pipe.notify_transmit_idle);
 	}
 #endif
 }
@@ -301,7 +309,7 @@ static inline void uart_callback_notify_pipe_closure(void)
 	    !atomic_test_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT) &&
 	    !atomic_test_bit(&uart_state, SM_UART_STATE_TX_ENABLED_BIT)) {
 		/* Pipe is closed, RX and TX are idle, notify the closure */
-		k_work_submit(&sm_pipe.notify_closed);
+		k_work_submit_to_queue(&sm_work_q, &sm_pipe.notify_closed);
 	}
 #endif
 }
@@ -343,7 +351,7 @@ static void uart_callback(const struct device *dev, struct uart_event *evt, void
 			rx_buf_unref(evt->data.rx.buf);
 			break;
 		}
-		(void)k_work_submit((struct k_work *)&rx_process_work);
+		k_work_schedule_for_queue(&sm_work_q, &rx_process_work, K_NO_WAIT);
 		break;
 	case UART_RX_BUF_REQUEST:
 		if (k_msgq_num_free_get(&rx_event_queue) < UART_RX_EVENT_COUNT_FOR_BUF) {
@@ -368,7 +376,7 @@ static void uart_callback(const struct device *dev, struct uart_event *evt, void
 		break;
 	case UART_RX_DISABLED:
 		atomic_clear_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT);
-		k_work_submit((struct k_work *)&rx_process_work);
+		k_work_reschedule_for_queue(&sm_work_q, &rx_process_work, K_NO_WAIT);
 		break;
 	default:
 		break;
@@ -380,16 +388,14 @@ static void uart_callback(const struct device *dev, struct uart_event *evt, void
 /* Write the data to tx_buffer and trigger sending. Repeat until everything is sent.
  * Returns 0 on success or a negative error code.
  */
-static int sm_uart_tx_write(const uint8_t *data, size_t len, bool flush)
+static int tx_write_block(const uint8_t *data, size_t *len, bool flush)
 {
 	size_t ret;
 	size_t sent = 0;
 	int err;
 
-	k_mutex_lock(&mutex_tx_put, K_FOREVER);
-
-	while (sent < len) {
-		ret = ring_buf_put(&tx_buf, data + sent, len - sent);
+	while (sent < *len) {
+		ret = ring_buf_put(&tx_buf, data + sent, *len - sent);
 		if (ret) {
 			sent += ret;
 			continue;
@@ -399,21 +405,21 @@ static int sm_uart_tx_write(const uint8_t *data, size_t len, bool flush)
 		err = k_sem_take(&tx_done_sem, K_FOREVER);
 		if (err) {
 			LOG_ERR("TX %s failed (%d). TX buf overflow, %zu dropped.",
-				"semaphore take", err, len - sent);
-			k_mutex_unlock(&mutex_tx_put);
+				"semaphore take", err, *len - sent);
+			*len = sent;
 			return err;
 		}
 		err = tx_start();
 		if (err) {
 			LOG_ERR("TX %s failed (%d). TX buf overflow, %zu dropped.", "start", err,
-				len - sent);
+				*len - sent);
 			k_sem_give(&tx_done_sem);
-			k_mutex_unlock(&mutex_tx_put);
+			*len = sent;
 			return err;
 		}
 	}
-	k_mutex_unlock(&mutex_tx_put);
 
+	*len = sent;
 	if (flush && k_sem_take(&tx_done_sem, K_NO_WAIT) == 0) {
 		err = tx_start();
 		if (err == -EAGAIN) {
@@ -429,14 +435,101 @@ static int sm_uart_tx_write(const uint8_t *data, size_t len, bool flush)
 	return 0;
 }
 
-int sm_tx_write(const uint8_t *data, size_t len, bool flush)
+static void tx_write_nonblock_fn(struct k_work *)
+{
+	struct sm_urc_ctx *uc = urc_ctx; /* Take a local copy. */
+	uint8_t *data;
+	size_t len;
+	int err = 0;
+
+	if (uc == NULL) {
+		LOG_DBG("No URC context");
+		return;
+	}
+
+	if (in_datamode()) {
+		/* Do not send URCs in datamode. */
+		return;
+	}
+
+	/* Do not lock the URC mutex.
+	 * This is the only reader and URC context ownership cannot be transferred as we
+	 * are in the same work queue that processes AT-commands.
+	 * Locking the mutex would cause a deadlock in tx_write_nonblock if the DTR is deasserted
+	 * while we are emptying the buffer.
+	 */
+	do {
+		len = ring_buf_get_claim(&uc->rb, &data, ring_buf_capacity_get(&uc->rb));
+		if (!len) {
+			break;
+		}
+		err = tx_write_block(data, &len, true);
+		ring_buf_get_finish(&uc->rb, len);
+
+	} while (!ring_buf_is_empty(&uc->rb) && !err);
+
+	if (err) {
+		LOG_WRN("URC transmit failed (%d). %d bytes unsent.", err,
+			ring_buf_size_get(&uc->rb));
+	}
+}
+
+static int tx_write_nonblock(const uint8_t *data, size_t len)
+{
+	int ret = 0;
+	struct sm_urc_ctx *uc = urc_ctx; /* Take a local copy. */
+
+	if (uc == NULL) {
+		LOG_ERR("No URC context");
+		return -EFAULT;
+	}
+
+	/* Lock to prevent concurrent writes. */
+	k_mutex_lock(&uc->mutex, K_FOREVER);
+
+	if (ring_buf_space_get(&uc->rb) >= len) {
+		ring_buf_put(&uc->rb, data, len);
+	} else {
+		LOG_WRN("URC buf overflow, dropping %u bytes.", len);
+		ret = -ENOBUFS;
+	}
+
+	k_mutex_unlock(&uc->mutex);
+	return ret;
+}
+
+static int sm_uart_tx_write(const uint8_t *data, size_t len, bool flush, bool urc,
+			    k_timeout_t urc_delay)
+{
+	int ret;
+
+	/* Send only from Serial Modem work queue to guarantee URC ordering. */
+	if (k_current_get() == &sm_work_q.thread && !urc) {
+		ret = tx_write_block(data, &len, flush);
+		if (!ret) {
+			/* Possible waiting URC is delayed for urc_delay. */
+			k_work_reschedule_for_queue(&sm_work_q, &tx_write_nonblock_work, urc_delay);
+		}
+	} else {
+		/* In other contexts, we buffer until Serial Modem work queue becomes available. */
+		ret = tx_write_nonblock(data, len);
+		if (!ret) {
+			/* URC is delayed for urc_delay only if it has not been scheduled. */
+			k_work_schedule_for_queue(&sm_work_q, &tx_write_nonblock_work, urc_delay);
+		}
+	}
+
+	return ret;
+}
+
+int sm_tx_write(const uint8_t *data, size_t len, bool flush, bool urc, k_timeout_t urc_delay)
 {
 #if SM_PIPE
-	if (atomic_test_bit(&sm_pipe.state, SM_PIPE_STATE_INIT_BIT) && sm_pipe.tx_cb != NULL) {
-		return sm_pipe.tx_cb(data, len);
+	if (atomic_test_bit(&sm_pipe.state, SM_PIPE_STATE_OPEN_BIT) && sm_pipe.tx_cb != NULL) {
+		return sm_pipe.tx_cb(data, len, urc, urc_delay);
 	}
 #endif
-	return sm_uart_tx_write(data, len, flush);
+	return sm_uart_tx_write(data, len, flush, urc, urc_delay);
 }
 
 int sm_uart_handler_enable(void)
@@ -455,6 +548,8 @@ int sm_uart_handler_enable(void)
 		LOG_ERR("uart_config_get: %d", err);
 		return err;
 	}
+
+	atomic_clear(&uart_state);
 
 	sm_uart_baudrate = cfg.baudrate;
 	LOG_INF("UART baud: %d d/p/s-bits: %d/%d/%d HWFC: %d",
@@ -481,14 +576,17 @@ int sm_uart_handler_enable(void)
 		return -EFAULT;
 	}
 
-	atomic_clear(&uart_state);
+	urc_ctx = sm_at_host_urc_ctx_acquire(SM_URC_OWNER_AT);
+	if (!urc_ctx) {
+		LOG_ERR("Failed to acquire URC context");
+		return -EFAULT;
+	}
+
 	tx_enable();
 	err = rx_enable();
 	if (err) {
 		return -EFAULT;
 	}
-
-	k_work_init_delayable(&rx_process_work, rx_process);
 
 	/* Flush possibly pending data in case Serial Modem was idle. */
 	tx_start();
@@ -511,6 +609,8 @@ int sm_uart_handler_disable(void)
 		LOG_ERR("RX disable failed (%d).", err);
 		return err;
 	}
+
+	(void)k_work_cancel_delayable(&rx_process_work);
 
 	return 0;
 }
@@ -631,8 +731,6 @@ static int pipe_receive(void *data, uint8_t *buf, size_t size)
 
 static int pipe_close(void *data)
 {
-	int err;
-
 	ARG_UNUSED(data);
 
 	if (!atomic_test_bit(&sm_pipe.state, SM_PIPE_STATE_OPEN_BIT)) {
@@ -641,17 +739,7 @@ static int pipe_close(void *data)
 
 	atomic_clear_bit(&sm_pipe.state, SM_PIPE_STATE_OPEN_BIT);
 
-	err = tx_disable(K_MSEC(50));
-	if (err) {
-		LOG_WRN("%s disable failed (%d).", "TX", err);
-	}
-
-	err = rx_disable();
-	if (err) {
-		LOG_ERR("%s disable failed (%d).", "RX", err);
-	}
-
-	return 0;
+	return sm_uart_handler_disable();
 }
 
 static const struct modem_pipe_api modem_pipe_api = {
@@ -674,16 +762,16 @@ static void notify_closed_fn(struct k_work *work)
 
 static void at_to_cmux_switch(void)
 {
-	/* TX handling when moving from AT to CMUX:
-	 * - Complete (OK message) TX transmission through regular UART.
-	 */
+	/* TX handling when moving from AT to CMUX. */
+
+	/* - Complete (OK message) TX transmission through regular UART. */
 	tx_disable(K_MSEC(10));
 
-	/* Possible TX handling improvements:
-	 * - Callers in sm_uart_tx_write need to abort when CMUX change is done. There may be
-	 *   multiple callers and they may be blocked.
-	 * - TX buffer must be flushed or the data must be routed to CMUX.
+	/* - Release URC context for handling unsolicited responses.
+	 *   We are serving AT#XCMUX, so it is not possible that the URC sending would be active.
 	 */
+	sm_at_host_urc_ctx_release(urc_ctx, SM_URC_OWNER_AT);
+	urc_ctx = NULL;
 
 	/* RX handling when moving from AT to CMUX:
 	 * - RX and RX buffers are retained.

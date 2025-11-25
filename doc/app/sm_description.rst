@@ -19,7 +19,7 @@ However, if you want to run your application on a different chip and use the nRF
 The application accepts both the modem specific AT commands and proprietary AT commands.
 The AT commands are documented in the following guides:
 
-* Modem specific AT commands - `nRF91x1 AT Commands Reference Guide`_  and `nRF9160 AT Commands Reference Guide`_
+* Modem specific AT commands - `nRF91x1 AT Commands Reference Guide`_
 * Proprietary AT commands - :ref:`SM_AT_commands`
 
 Requirements
@@ -35,32 +35,16 @@ The application supports the following development kits:
      - PCA
      - Board name
      - Board target
-   * - `Thingy:91 X <Thingy91X_>`_
-     - PCA20065
-     - `thingy91x <Thingy91X_>`_
-     - ``thingy91x/nrf9151/ns``
-   * - `Thingy:91 <Thingy91_>`_
-     - PCA20035
-     - `thingy91 <Thingy91_>`_
-     - ``thingy91/nrf9160/ns``
-   * - `nRF9161 DK <nRF91 DK_>`_
-     - PCA10153
-     - `nrf9161dk`_
-     - ``nrf9161dk/nrf9161/ns``
-   * - `nRF9160 DK <nRF91 DK_>`_
-     - PCA10090
-     - `nrf9160dk`_
-     - ``nrf9160dk/nrf9160/ns``
    * - `nRF9151 DK <nRF91 DK_>`_
      - PCA10171
      - `nrf9151dk`_
      - ``nrf9151dk/nrf9151/ns``
-   * - `nRF9131 EK <nRF91 DK_>`_
-     - PCA10165
-     - `nrf9131ek`_
-     - ``nrf9131ek/nrf9131/ns``
+   * - `Thingy:91 X <Thingy91X_>`_
+     - PCA20065
+     - `thingy91x <Thingy91X_>`_
+     - ``thingy91x/nrf9151/ns``
 
-For more security, it is recommended to use the ``*/ns`` `variant <app_boards_names_>`_ of the board target.
+For more security, the application must use the ``*/ns`` `variant <app_boards_names_>`_ of the board target, which is required when using the nRF91 Series `Modem library`_.
 When built for this variant, the sample is configured to compile and run as a non-secure application using `security by separation <ug_tfm_security_by_separation_>`_.
 Therefore, it automatically includes `Trusted Firmware-M <ug_tfm_>`_ that prepares the required peripherals and secure services to be available for the application.
 
@@ -78,12 +62,17 @@ Configuration options
 
 CONFIG_SM_CUSTOMER_VERSION - Customer version string
    Version string defined by the customer after customizing the application.
-   When defined, this version is reported with the baseline versions by the ``#XSLMVER`` AT command.
+   When defined, this version is reported with the baseline versions by the ``#XSMVER`` AT command.
 
 .. _CONFIG_SM_AT_MAX_PARAM:
 
 CONFIG_SM_AT_MAX_PARAM - AT command parameter count limit
    This defines the maximum number of parameters allowed in an AT command, including the command name.
+
+.. _CONFIG_SM_AT_BUF_SIZE:
+
+CONFIG_SM_AT_BUF_SIZE - AT command buffer size
+   This option defines the size of the buffer for incoming AT commands and modem responses.
 
 .. _CONFIG_SM_CMUX:
 
@@ -101,35 +90,11 @@ CONFIG_SM_PPP - Enable PPP functionality
    When CMUX is also enabled, PPP is usable only through a CMUX channel.
    See :ref:`SM_AT_PPP` for more information.
 
-.. _CONFIG_SM_NATIVE_TLS:
-
-CONFIG_SM_NATIVE_TLS - Use Zephyr's Mbed TLS for TLS connections
-   This option is enabled by the native TLS overlay.
-   See :ref:`sm_native_tls` for more information.
-
-.. _CONFIG_SM_NATIVE_TLS_CREDENTIAL_BUFFER_SIZE:
-
-CONFIG_SM_NATIVE_TLS_CREDENTIAL_BUFFER_SIZE - Buffer space reserved for loading credentials
-   Specifies the credential buffer size available for a single ``sec_tag`` when loading credentials for Mbed TLS.
-   The default value is ``4096``.
-
-.. _CONFIG_SM_NATIVE_TLS_CREDENTIAL_BUFFER_COUNT:
-
-CONFIG_SM_NATIVE_TLS_CREDENTIAL_BUFFER_COUNT - Number of buffers for loading credentials
-   The number of buffers available for loading ``sec_tag`` credentials for Mbed TLS.
-   TLS client only needs the buffer when connecting, while TLS server needs the buffer as long as it is running.
-   Increase the value if you need both TLS client and server running simultaneously with different ``sec_tags``.
-   The default value is ``1``.
-
 .. _CONFIG_SM_EXTERNAL_XTAL:
 
 CONFIG_SM_EXTERNAL_XTAL - Use external XTAL for UARTE
    This option configures the application to use an external XTAL for UARTE.
-   For more information, see the UARTE - Universal asynchronous receiver/transmitter with EasyDMA section of the following documentation:
-
-   * `nRF9151 Product Specification`_
-   * `nRF9161 Product Specification`_
-   * `nRF9160 Product Specification`_
+   For more information, see the UARTE - Universal asynchronous receiver/transmitter with EasyDMA section of the `nRF9151 Product Specification`_ documentation.
 
 .. _CONFIG_SM_AUTO_CONNECT:
 
@@ -159,6 +124,7 @@ CONFIG_SM_AUTO_CONNECT - Connect to the network at start-up or reset
 
 CONFIG_SM_CR_TERMINATION - CR termination
    This option configures the application to accept AT commands ending with a carriage return.
+   This is the default AT command terminator.
 
    Select this option if you want to connect to the development kit using PuTTY.
    See `Testing and optimization`_  for instructions.
@@ -193,16 +159,6 @@ CONFIG_SM_GNSS - GNSS support in |SM|
 CONFIG_SM_NRF_CLOUD - nRF Cloud support in |SM|
    This option enables additional AT commands for using the nRF Cloud service.
 
-.. _CONFIG_SM_FTPC:
-
-CONFIG_SM_FTPC - FTP client support in |SM|
-   This option enables additional AT commands for using the FTP client service.
-
-.. _CONFIG_SM_TFTPC:
-
-CONFIG_SM_TFTPC - TFTP client support in |SM|
-   This option enables additional AT commands for using the TFTP client service.
-
 .. _CONFIG_SM_MQTTC:
 
 CONFIG_SM_MQTTC - MQTT client support in |SM|
@@ -213,16 +169,6 @@ CONFIG_SM_MQTTC - MQTT client support in |SM|
 CONFIG_SM_MQTTC_MESSAGE_BUFFER_LEN - Size of the buffer for the MQTT library
    This option specifies the maximum message size which can be transmitted or received through MQTT (excluding PUBLISH payload).
    The default value is 512, meaning 512 bytes for TX and RX, respectively.
-
-.. _CONFIG_SM_HTTPC:
-
-CONFIG_SM_HTTPC - HTTP client support in |SM|
-   This option enables additional AT commands for using the HTTP client service.
-
-.. _CONFIG_SM_TWI:
-
-CONFIG_SM_TWI - TWI support in |SM|
-   This option enables additional AT commands for using the TWI service.
 
 .. _CONFIG_SM_UART_RX_BUF_COUNT:
 
@@ -267,16 +213,21 @@ CONFIG_SM_PGPS_INJECT_FIX_DATA - Injects the data obtained when acquiring a fix.
    The default value is ``y``.
 
 
-.. _sm_additional_config:
+.. _sm_logging:
 
-Additional configuration
-========================
+Logging
+=======
 
-To save power, both the console and the output logs over ``UART_0`` are disabled in this application.
-This information is logged using RTT instead.
-See `Testing and optimization`_ for instructions on how to view this information.
+|SM| uses the SEGGER Real-Time Transfer (RTT) for application logging.
+You can view the RTT logs with an RTT client such as ``J-Link RTT Viewer``.
+See `Testing and optimization`_ for instructions on how to view the logs.
 
-To switch to UART output, change the following options in the :file:`prj.conf` file::
+.. note::
+   The negative error codes that are visible in logs are *errno* codes defined in `nrf_errno.h`_.
+
+By default, the |SM| uses the ``UART0`` for sending and receiving AT commands.
+If a different UART is used, the application log can be output through ``UART0`` while AT commands are sent and received through the other UART.
+To switch to ``UART0`` output for application logs, change the following options in the :file:`prj.conf` file::
 
    # Segger RTT
    CONFIG_USE_SEGGER_RTT=n
@@ -308,18 +259,11 @@ The following configuration files are provided:
 * :file:`prj.conf` - This configuration file contains the standard configuration for the |SM| application and is included by default by the build system.
 
 * :file:`overlay-external-mcu.overlay` - This configures the |SM| application to communicate with external MCU over ``uart2``, using specific pins for UART, DTR, and RI.
-  The overlay is pin compatible with nRF9160DK, nRF9151DK, and nRF9161DK.
+  The overlay is pin compatible with nRF9151DK.
   For other setups, you can customize the overlay to fit your configuration.
-
-* :file:`overlay-native_tls.conf` - This configuration file contains additional configuration options that are required to use :ref:`sm_native_tls`.
-  Not supported with the ``thingy91/nrf9160/ns`` board target due to flash memory constraints.
-  If you need to use native TLS with Thingy:91, you must disable features to free up flash memory.
 
 * :file:`overlay-carrier.conf` - Configuration file that adds |NCS| `LwM2M carrier`_ support.
   See :ref:`sm_carrier_library_support` for more information on how to connect to an operator's device management platform.
-  With the ``thingy91/nrf9160/ns`` board target, you must additionally pass the sysbuild option ``-DSB_CONFIG_THINGY91_STATIC_PARTITIONS_LWM2M_CARRIER=y`` to fit the application in the flash memory.
-  This means that you will need an external debug probe to program the application.
-  See the `Updating the Thingy:91 firmware using nRF Connect for Desktop apps <Thingy91_firmware_desktop_app_>`_ for more information.
 
 * :file:`overlay-carrier-softbank.conf` and :file:`sysbuild-softbank.conf` - Configuration files that add SoftBank configurations needed by the carrier library.
   Used in conjunction with :file:`overlay-carrier.conf`.
@@ -335,7 +279,7 @@ The following configuration files are provided:
   See :ref:`SM_AT_CMUX` for more information.
 
 * :file:`overlay-ppp.conf` - Configuration file that adds support for the Point-to-Point Protocol (PPP).
-  This disables most of the IP-based protocols available through AT commands (such as FTP and MQTT) as it is expected that the controlling chip's own IP stack is used instead.
+  This disables most of the IP-based protocols available through AT commands (such as MQTT) as it is expected that the controlling chip's own IP stack is used instead.
   See :ref:`CONFIG_SM_PPP <CONFIG_SM_PPP>` and :ref:`SM_AT_PPP` for more information.
 
 * :file:`overlay-ppp-without-cmux.conf` - Configuration file that enables support for the second UART to be used by PPP.
@@ -353,38 +297,8 @@ The following configuration files are provided:
   This overlay can be used if your setup does not have the need or means for managing the power externally.
   Modify the overlay to fit your configuration.
 
-* :file:`overlay-zephyr-modem.conf`, :file:`overlay-zephyr-modem-external-mcu.overlay`, :file:`overlay-zephyr-modem-nrf9160dk-nrf52840.conf`, and :file:`overlay-zephyr-modem-nrf9160dk-nrf52840.overlay` - These configuration files are used when compiling |SM| to turn an nRF91 Series SiP into a Zephyr-compatible standalone modem.
-  See :ref:`sm_as_zephyr_modem` for more information.
-
 The board-specific devicetree overlays (:file:`boards/*.overlay`) set up configurations that are specific to each supported development kit.
 All of them configure the DTR to be deasserted from a button and RI to blink an LED.
-
-.. _sm_native_tls:
-
-Native TLS
-----------
-
-By default, the secure socket (TLS/DTLS) is offloaded to the modem.
-If you need customized TLS/DTLS features that are not supported by the modem firmware, you can use native TLS instead.
-Native TLS uses the Mbed TLS library in Zephyr to establish secure connectivity.
-Currently, the |SM| application can be built to use native TLS for the following services:
-
-* Secure socket
-* TLS Proxy client
-* TLS Proxy server
-* DTLS Proxy client
-* DTLS Proxy server
-* HTTPS client
-
-With native TLS, the credentials are stored in the Zephyr settings storage with the ``AT#XCMNG`` command.
-
-The configuration options that are required to enable native TLS are defined in the :file:`overlay-native_tls.conf` file.
-
-.. note::
-
-   Native TLS services have the following limitations:
-
-   * TLS session resumption is currently not supported.
 
 Sending traces over UART on an nRF91 Series DK
 ==============================================
@@ -443,11 +357,10 @@ To connect to an nRF91 Series DK with a PC:
 
    .. note::
 
-      The default AT command terminator is a carriage return followed by a line feed (``\r\n``).
-      The Serial Terminal app supports this format.
-      If you want to use another terminal emulator, make sure that the configured AT command terminator corresponds to the line terminator of your terminal.
-      When using PuTTY, you must set the :ref:`CONFIG_SM_CR_TERMINATION <CONFIG_SM_CR_TERMINATION>` |SM| configuration option.
-      See :ref:`sm_config_options` for more details.
+      The default AT command terminator is a carriage return (``\r``).
+      The Serial Terminal app, PuTTY and many terminal emulators support this format by default.
+      However, make sure that the configured AT command terminator corresponds to the line terminator of your terminal.
+      See :ref:`sm_config_options` for more details on AT command terminator choices.
 
 .. sm_connecting_91dk_pc_instr_end
 
@@ -458,13 +371,13 @@ Connecting with an external MCU
 
 .. note::
 
-   This section does not apply to Thingy:91, Thingy:91 X, or nRF9131 EK.
+   This section does not apply to Thingy:91 X.
 
 If you run your user application on an external MCU (for example, an nRF52 Series development kit), you can control the |SM| application on an nRF91 Series device directly from the application.
 See the :ref:`sm_shell_sample` for a sample implementation of such an application.
 
 To connect with an external MCU using UART_2, include the :file:`overlay-external-mcu.overlay` devicetree overlay in your build.
-This overlay configures the UART_2 pins, DTR pin, and RI pin for the nRF9160 DK, nRF9151 DK, and nRF9161 DK.
+This overlay configures the UART_2 pins, DTR pin, and RI pin for the nRF9151 DK.
 
 If you use a different setup, you can customize the :file:`overlay-external-mcu.overlay` file to match your hardware configuration in (for example) the following ways:
 
@@ -517,6 +430,38 @@ The following table shows how to connect selected development kit to an nRF91 Se
 
 .. tabs::
 
+   .. group-tab:: nRF54L15 DK
+
+      .. list-table::
+         :header-rows: 1
+
+         * - nRF54L15 DK
+           - nRF91 Series DK
+         * - UART TX P0.00
+           - UART RX P0.11
+         * - UART RX P0.01
+           - UART TX P0.10
+         * - UART CTS P0.03
+           - UART RTS P0.12
+         * - UART RTS P0.02
+           - UART CTS P0.13
+         * - DTR OUT P1.11
+           - DTR IN P0.31
+         * - RI IN P1.12
+           - RI OUT P0.30
+         * - GPIO GND
+           - GPIO GND
+
+      .. note::
+         You must disable the VCOM0 on the nRF54L15 DK to release the UART GPIO pins to use it with the :ref:`sm_shell_sample`.
+
+         * For nRF54L15 DK, you can use the `Board Configurator app`_ to disable the `Connect port VCOM0` setting.
+
+      .. note::
+         The GPIO output levels on the nRF91 Series device and nRF54L15 DK must be the same.
+
+         * You can set the VDD voltages for both devices with the `Board Configurator app`_.
+
    .. group-tab:: nRF52 DK
 
       .. list-table::
@@ -538,6 +483,11 @@ The following table shows how to connect selected development kit to an nRF91 Se
            - RI OUT P0.30
          * - GPIO GND
            - GPIO GND
+
+      .. note::
+         The GPIO output level on the nRF91 Series device side must be 3 V.
+
+         * For nRF9151 DK, you can set the VDD voltage with the `Board Configurator app`_.
 
    .. group-tab:: nRF53 DK
 
@@ -561,9 +511,14 @@ The following table shows how to connect selected development kit to an nRF91 Se
          * - GPIO GND
            - GPIO GND
 
+      .. note::
+         The GPIO output level on the nRF91 Series device side must be 3 V.
+
+         * For nRF9151 DK, you can set the VDD voltage with the `Board Configurator app`_.
+
 Use the following UART devices:
 
-* nRF52 or nRF53 Series DK - UART0
+* nRF54, nRF52 or nRF53 Series DK - UART0
 * nRF91 Series DK - UART2
 
 The UART configuration must match on both sides.
@@ -573,39 +528,25 @@ By default the |SM| application and :ref:`sm_shell_sample` use the following set
 * Baud rate: 115200
 * Parity bit: no
 
-.. note::
-   The GPIO output level on the nRF91 Series device side must be 3 V.
+Communicating with the modem on Thingy:91 X
+===========================================
 
-   * For nRF91x1 DK, you can set the VDD voltage with the `Board Configurator app`_.
-   * For nRF9160 DK, you can set the VDD voltage with the **VDD IO** switch (**SW9**).
-     See the `VDD supply rail section in the nRF9160 DK User Guide`_ for more information related to nRF9160 DK.
-
-.. _sm_connecting_thingy91:
-
-Communicating with the modem on Thingy:91
-=========================================
-
-In this scenario, Thingy:91 running the |SM| application serves as the host.
+In this scenario, Thingy:91 X running the |SM| application serves as the host.
 You can use a PC as a client.
-
-.. _sm_connecting_thingy91_pc:
 
 Connecting with a PC
 --------------------
 
-The nRF52840 SoC of Thingy:91 is pre-programmed with the `Connectivity bridge`_ application.
-To update the Connectivity bridge application, see the `Updating the Thingy:91 firmware using nRF Connect for Desktop apps <Thingy91_firmware_desktop_app_>`_  documentation.
-The Connectivity bridge application routes ``UART_0`` to ``USB_CDC0`` on Thingy:91.
+The nRF5340 SoC of Thingy:91 X is pre-programmed with the `Connectivity bridge`_ application.
+To update the Connectivity bridge application, see the `Updating the Thingy:91 X firmware using nRF Util <Thingy91x_firmware_update_>`_  documentation.
+The Connectivity bridge application routes ``UART_0`` to ``USB_CDC0`` on Thingy:91 X.
 By enabling the ``CONFIG_BRIDGE_BLE_ENABLE`` Kconfig option in the Connectivity bridge application, you can also use |SM| over `Nordic UART Service (NUS) <Nordic UART Service_>`_.
 
-To connect to a Thingy:91 with a PC:
+To connect to a Thingy:91 X with a PC:
 
 .. include:: sm_description.rst
    :start-after: .. sm_connecting_91dk_pc_instr_start
    :end-before: .. sm_connecting_91dk_pc_instr_end
-
-You can also test the i2c sensor on Thingy:91 using :ref:`SM_AT_TWI`.
-See :ref:`sm_testing_twi` for more details.
 
 .. _sm_testing_section:
 
@@ -671,7 +612,6 @@ This application uses the following |NCS| libraries:
 * `AT monitor`_
 * `Modem library integration layer`_
 * `Modem JWT`_
-* `FTP client`_
 * `SMS`_
 * `FOTA download`_
 * `Downloader`_

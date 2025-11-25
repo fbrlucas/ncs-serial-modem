@@ -28,7 +28,7 @@ There are 3 types of AT commands:
 AT responds to all commands with a final response.
 
 See the following subpages for documentation of the proprietary AT commands.
-The modem specific AT commands are documented in the `nRF91x1 AT Commands Reference Guide`_  and `nRF9160 AT Commands Reference Guide`_.
+The modem specific AT commands are documented in the `nRF91x1 AT Commands Reference Guide`_.
 
 .. toctree::
    :maxdepth: 2
@@ -37,10 +37,7 @@ The modem specific AT commands are documented in the `nRF91x1 AT Commands Refere
    Generic_AT_commands
    CMUX_AT_commands
    FOTA_AT_commands
-   FTP_AT_commands
    GNSS_AT_commands
-   GPIO_AT_commands
-   HTTPC_AT_commands
    ICMP_AT_commands
    CARRIER_AT_commands
    MQTT_AT_commands
@@ -49,4 +46,3 @@ The modem specific AT commands are documented in the `nRF91x1 AT Commands Refere
    SMS_AT_commands
    SOCKET_AT_commands
    TCPUDP_AT_commands
-   TWI_AT_commands

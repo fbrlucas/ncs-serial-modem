@@ -4,23 +4,19 @@
 #
 # SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
 
-#
-# Script to stop PPP link inside CMUX channel
-# using Serial Modem
-#
+PIDFILE="/var/run/nrf91-modem.pid"
+PPP_PIDFILE="/var/run/ppp-nrf91.pid"
 
-AT_CMUX=/dev/gsmtty1
-CHATOPT="-vs"
-
-if [[ ! -c $AT_CMUX ]]; then
-	echo "AT CMUX channel not found: $AT_CMUX"
-	pkill pppd
-	pkill ldattach
-	exit 1
+# Request PPPD to terminate
+if [ -f $PPP_PIDFILE ]; then
+        echo "Stopping PPP link..."
+        kill -SIGTERM $(head -1 <$PPP_PIDFILE)
 fi
 
-chat $CHATOPT -t30 "" "AT+CFUN=0" "#XPPP: 0,0" >$AT_CMUX <$AT_CMUX
 
-sleep 1
-test -f /var/run/ppp-nrf91.pid && kill $(head -1 </var/run/ppp-nrf91.pid)
-pkill ldattach
+# Wait for Shutdown script to complete
+if [ -f $PIDFILE ]; then
+        echo "Waiting for Shutdown script to complete..."
+        timeout 12s tail --pid=$(head -1 <$PIDFILE) -f /dev/null \
+        || echo "Timeout waiting for Shutdown script to stop"
+fi

@@ -12,7 +12,8 @@ The |SM| (SM) application can run in the two operation modes defined by the AT c
 When running in data mode, the application does the following:
 
 * It considers all the data received from the MCU over the UART bus as arbitrary data to be streamed through the LTE network by various service modules.
-* It considers all the data streamed from a remote service as arbitrary data to be sent to the MCU over the UART bus.
+* It buffers the URCs received from modem and threads and sends them to the MCU only after exiting data mode.
+* For TLS and UDP client (and servers), it considers all the data streamed from a remote service as arbitrary data to be sent to the MCU over the UART bus.
 
 Overview
 ********
@@ -23,9 +24,7 @@ However, the |SM| data mode is applied automatically while using the following m
 * Socket ``send()`` and ``sendto()``
 * TCP/TLS proxy send
 * UDP/DTLS proxy send
-* FTP put, uput and mput
 * MQTT publish
-* HTTP request
 * GNSS nRF Cloud send message
 * LwM2M carrier library app data send
 
@@ -35,8 +34,9 @@ Entering data mode
 The |SM| application enters data mode when an AT command to send data out does not carry the payload.
 See the following examples:
 
-* ``AT#XSEND`` makes |SM| enter data mode to receive arbitrary data to transmit.
-* ``AT#XSEND="data"`` makes |SM| transmit data in normal AT Command mode.
+* ``AT#XSEND=0,2,0`` makes |SM| enter data mode to receive arbitrary data to transmit for socket 0.
+* ``AT#XSEND=0,2,0,<data_len>`` makes |SM| enter data mode to receive arbitrary data of the specified length to transmit for socket 0.
+* ``AT#XSEND=0,0,0,"data"`` makes |SM| transmit data in normal AT Command mode for socket 0.
 
 .. note::
    If the data contains either  ``,`` or ``"`` as characters, it can only be sent in data mode.
@@ -46,9 +46,6 @@ Other examples:
 
 * ``AT#XTCPSEND``
 * ``AT#XUDPSEND``
-* ``AT#XFTP="put",<file>``
-* ``AT#XFTP="uput"``
-* ``AT#XFTP="mput",<file>``
 * ``AT#XMQTTPUB=<topic>,"",<qos>,<retain>``
 * ``AT#XNRFCLOUD=2``
 * ``AT#XCARRIER="app_data_set"``
@@ -70,10 +67,12 @@ This Unsolicited Result Code (URC) can also be used to impose flow control on up
 Exiting data mode
 =================
 
-To exit the data mode, the MCU sends the termination command set by the :ref:`CONFIG_SM_DATAMODE_TERMINATOR <CONFIG_SM_DATAMODE_TERMINATOR>` configuration option over UART.
+To exit the data mode without the specification of ``<data_len>``, the MCU sends the termination command set by the :ref:`CONFIG_SM_DATAMODE_TERMINATOR <CONFIG_SM_DATAMODE_TERMINATOR>` configuration option over UART.
 
 The pattern string could be sent alone or as an affix to the data.
 The pattern string must be sent in full.
+
+If ``<data_len>`` is specified in the AT command and the specified data length is reached, the |SM| application exits data mode. Termination command is not used in this case.
 
 When exiting the data mode, the |SM| application sends the ``#XDATAMODE`` unsolicited notification.
 
@@ -82,7 +81,6 @@ After exiting the data mode, the |SM| application returns to the AT command mode
 .. note::
    The |SM| application sends the termination string :ref:`CONFIG_SM_DATAMODE_TERMINATOR <CONFIG_SM_DATAMODE_TERMINATOR>` and moves to a state where the data received on the UART is dropped in the following scenarios:
 
-   * The TCP server is stopped due to an error.
    * The remote server disconnects the TCP client.
    * The TCP client disconnects from the remote server due to an error.
    * The UDP client disconnects from the remote server due to an error.
@@ -225,15 +223,16 @@ Unsolicited notification
 
    #XDATAMODE: <status>
 
-The ``<status>`` value ``0`` indicates that the data mode operation was successful.
-A negative value indicates the error code of the failing operation.
+* The ``<status>`` value is an integer that indicates the status of the data mode operation.
+  It is ``0`` for success or ``-1`` for failure.
 
 Example
 ~~~~~~~
 
 ::
 
-   AT#XSEND
+   AT#XSEND=0,2,0
+
    OK
    Test TCP datamode
    +++

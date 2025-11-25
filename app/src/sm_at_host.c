@@ -43,8 +43,9 @@ static sm_datamode_handler_t datamode_handler;
 static int datamode_handler_result;
 uint16_t sm_datamode_time_limit; /* Send trigger by time in data mode */
 K_MUTEX_DEFINE(mutex_mode); /* Protects the operation mode variables. */
+static size_t datamode_data_len; /* Expected data length in data mode. */
 
-uint8_t sm_at_buf[SM_AT_MAX_CMD_LEN + 1];
+uint8_t sm_at_buf[CONFIG_SM_AT_BUF_SIZE + 1];
 uint8_t sm_data_buf[SM_MAX_MESSAGE_SIZE];
 
 RING_BUF_DECLARE(data_rb, CONFIG_SM_DATAMODE_BUF_SIZE);
@@ -52,6 +53,15 @@ static uint8_t quit_str_partial_match;
 K_MUTEX_DEFINE(mutex_data); /* Protects the data_rb and quit_str_partial_match. */
 
 static struct k_work raw_send_scheduled_work;
+
+enum sm_debug_print {
+	SM_DEBUG_PRINT_NONE,
+	SM_DEBUG_PRINT_SHORT,
+	SM_DEBUG_PRINT_FULL
+};
+static bool echo;
+static bool incomplete_echo; /* Are we in progress of echoing a command? */
+static struct sm_urc_ctx urc_ctx;
 
 /* global functions defined in different files */
 int sm_at_init(void);
@@ -108,21 +118,28 @@ static bool exit_datamode(void)
 			(void)datamode_handler(DATAMODE_EXIT, NULL, 0, SM_DATAMODE_FLAGS_NONE);
 		}
 		datamode_handler = NULL;
+		datamode_data_len = 0;
+		quit_str_partial_match = 0;
 
 		k_mutex_lock(&mutex_data, K_FOREVER);
 		ring_buf_reset(&data_rb);
 		k_mutex_unlock(&mutex_data);
 
+		if (datamode_handler_result) {
+			LOG_ERR("Datamode handler error: %d", datamode_handler_result);
+			datamode_handler_result = -1;
+		}
 		rsp_send("\r\n#XDATAMODE: %d\r\n", datamode_handler_result);
 		datamode_handler_result = 0;
-
-		sm_at_socket_notify_datamode_exit();
 
 		LOG_INF("Exit datamode");
 		ret = true;
 	}
 
 	k_mutex_unlock(&mutex_mode);
+
+	/* Flush the TX buffer. */
+	sm_tx_write(NULL, 0, true, false, K_NO_WAIT);
 
 	return ret;
 }
@@ -219,7 +236,7 @@ static void inactivity_timer_handler(struct k_timer *timer)
 
 	LOG_INF("time limit reached");
 	if (!ring_buf_is_empty(&data_rb)) {
-		k_work_submit(&raw_send_scheduled_work);
+		k_work_submit_to_queue(&sm_work_q, &raw_send_scheduled_work);
 	} else {
 		LOG_DBG("data buffer empty");
 	}
@@ -238,53 +255,67 @@ static size_t raw_rx_handler(const uint8_t *buf, const size_t len)
 	uint8_t prev_quit_str_match_count = quit_str_partial_match;
 	uint8_t prev_quit_str_match_count_original = quit_str_partial_match;
 
-	/* Find quit_str or partial match at the end of the buffer. */
-	for (processed = 0; processed < len && quit_str_match == false; processed++) {
-		if (buf[processed] == quit_str[quit_str_match_count]) {
-			quit_str_match_count++;
-			if (quit_str_match_count == strlen(quit_str)) {
-				quit_str_match = true;
-			}
-		} else if (quit_str_match_count > 0) {
-			/* Check if we match a beginning of a new quit_str.
-			 * We either match the first character, or in the edge case of
-			 * quit_str starting with multiple same characters, e.g. "aaabbb",
-			 * we match all but the current character (with input aaaa).
-			 */
-			for (int i = 0; i < quit_str_match_count; i++) {
-				if (buf[processed] != quit_str[i]) {
-					quit_str_match_count = i;
-					break;
+	/* If <data_len> is set in datamode, skip searching for quit_str. Just send data until
+	 * length is reached.
+	 */
+	if (datamode_data_len > 0) {
+		for (processed = 0; processed < len && datamode_data_len > 0; processed++) {
+			write_data_buf(&buf[processed], 1);
+			datamode_data_len--;
+		}
+		if (datamode_data_len == 0) {
+			raw_send(SM_DATAMODE_FLAGS_NONE);
+			(void)exit_datamode();
+		}
+	} else {
+		/* Find quit_str or partial match at the end of the buffer. */
+		for (processed = 0; processed < len && quit_str_match == false; processed++) {
+			if (buf[processed] == quit_str[quit_str_match_count]) {
+				quit_str_match_count++;
+				if (quit_str_match_count == strlen(quit_str)) {
+					quit_str_match = true;
+				}
+			} else if (quit_str_match_count > 0) {
+				/* Check if we match a beginning of a new quit_str.
+				 * We either match the first character, or in the edge case of
+				 * quit_str starting with multiple same characters, e.g. "aaabbb",
+				 * we match all but the current character (with input aaaa).
+				 */
+				for (int i = 0; i < quit_str_match_count; i++) {
+					if (buf[processed] != quit_str[i]) {
+						quit_str_match_count = i;
+						break;
+					}
+				}
+				if (quit_str_match_count == 0) {
+					/* No match.
+					 * Previous partial quit_str is data.
+					 */
+					prev_quit_str_match_count = 0;
+				} else if (prev_quit_str_match_count > 0) {
+					/* Partial match.
+					 * Part of the previous partial quit_str is data.
+					 */
+					prev_quit_str_match_count--;
 				}
 			}
-			if (quit_str_match_count == 0) {
-				/* No match.
-				 * Previous partial quit_str is data.
-				 */
-				prev_quit_str_match_count = 0;
-			} else if (prev_quit_str_match_count > 0) {
-				/* Partial match.
-				 * Part of the previous partial quit_str is data.
-				 */
-				prev_quit_str_match_count--;
-			}
+		}
+
+		/* Write data which was previously interpreted as a possible partial quit_str. */
+		write_data_buf(quit_str,
+			       prev_quit_str_match_count_original - prev_quit_str_match_count);
+
+		/* Write data from buf until the start of the possible (partial) quit_str. */
+		write_data_buf(buf, processed - (quit_str_match_count - prev_quit_str_match_count));
+
+		if (quit_str_match) {
+			raw_send(SM_DATAMODE_FLAGS_NONE);
+			(void)exit_datamode();
+			quit_str_partial_match = 0;
+		} else {
+			quit_str_partial_match = quit_str_match_count;
 		}
 	}
-
-	/* Write data which was previously interpreted as a possible partial quit_str. */
-	write_data_buf(quit_str, prev_quit_str_match_count_original - prev_quit_str_match_count);
-
-	/* Write data from buf until the start of the possible (partial) quit_str. */
-	write_data_buf(buf, processed - (quit_str_match_count - prev_quit_str_match_count));
-
-	if (quit_str_match) {
-		raw_send(SM_DATAMODE_FLAGS_NONE);
-		(void)exit_datamode();
-		quit_str_partial_match = 0;
-	} else {
-		quit_str_partial_match = quit_str_match_count;
-	}
-
 	k_mutex_unlock(&mutex_data);
 
 	return processed;
@@ -293,6 +324,8 @@ static size_t raw_rx_handler(const uint8_t *buf, const size_t len)
 /*
  * Check AT command grammar based on below.
  *  AT<NULL>
+ *  ATE0<NULL>
+ *  ATE1<NULL>
  *  AT<separator><body><NULL>
  *  AT<separator><body>=<NULL>
  *  AT<separator><body>?<NULL>
@@ -300,7 +333,7 @@ static size_t raw_rx_handler(const uint8_t *buf, const size_t len)
  *  AT<separator><body>=<parameters><NULL>
  * In which
  * <separator>: +, %, #
- * <body>: alphanumeric char only, size > 0
+ * <body>: alphanumeric char or '_' only, size > 0
  * <parameters>: arbitrary, size > 0
  */
 static int cmd_grammar_check(const char *cmd, size_t length)
@@ -318,6 +351,12 @@ static int cmd_grammar_check(const char *cmd, size_t length)
 		return 0;
 	}
 
+	/* Check ATE0 and ATE1 */
+	if (toupper(*cmd) == 'E' && (*(cmd + 1) == '0' || *(cmd + 1) == '1') &&
+	    *(cmd + 2) == '\0') {
+		return 0;
+	}
+
 	/* check AT<separator> */
 	if ((*cmd != '+') && (*cmd != '%') && (*cmd != '#')) {
 		return -EINVAL;
@@ -327,8 +366,8 @@ static int cmd_grammar_check(const char *cmd, size_t length)
 	cmd += 1;
 	body = cmd;
 	while (true) {
-		/* check body is alphanumeric */
-		if (!isalpha((int)*cmd) && !isdigit((int)*cmd)) {
+		/* check body is alphanumeric or '_' */
+		if (!isalpha((int)*cmd) && !isdigit((int)*cmd) && *cmd != '_') {
 			break;
 		}
 		cmd++;
@@ -445,7 +484,8 @@ static void format_final_result(char *buf, size_t buf_len, size_t buf_max_len)
 	}
 }
 
-static int sm_at_send_internal(const uint8_t *data, size_t len, bool print_full_debug)
+static int sm_at_send_internal(const uint8_t *data, size_t len, bool urc,
+			       enum sm_debug_print print_debug)
 {
 	int ret;
 
@@ -454,16 +494,21 @@ static int sm_at_send_internal(const uint8_t *data, size_t len, bool print_full_
 		return -EINTR;
 	}
 
-	ret = sm_tx_write(data, len, true);
+	ret = sm_tx_write(data, len, true, urc, incomplete_echo ?
+			  K_MSEC(CONFIG_SM_URC_DELAY_WITH_INCOMPLETE_ECHO_MS) : K_NO_WAIT);
 	if (!ret) {
-		LOG_HEXDUMP_DBG(data, print_full_debug ? len : MIN(HEXDUMP_LIMIT, len), "TX");
+		if (print_debug == SM_DEBUG_PRINT_FULL) {
+			LOG_HEXDUMP_DBG(data, len, "TX");
+		} else if (print_debug == SM_DEBUG_PRINT_SHORT) {
+			LOG_HEXDUMP_DBG(data, MIN(HEXDUMP_LIMIT, len), "TX");
+		}
 	}
 	return ret;
 }
 
 int sm_at_send(const uint8_t *data, size_t len)
 {
-	return sm_at_send_internal(data, len, true);
+	return sm_at_send_internal(data, len, false, SM_DEBUG_PRINT_FULL);
 }
 
 int sm_at_send_str(const char *str)
@@ -535,6 +580,7 @@ static size_t cmd_rx_handler(const uint8_t *buf, const size_t len, bool *stop_at
 	size_t processed;
 	static bool inside_quotes;
 	static size_t at_cmd_len;
+	static size_t echo_len;
 	static uint8_t prev_character;
 	bool send = false;
 
@@ -599,6 +645,41 @@ static size_t cmd_rx_handler(const uint8_t *buf, const size_t len, bool *stop_at
 		}
 	}
 
+	if (echo) {
+		const uint8_t terminator_len = IS_ENABLED(CONFIG_SM_CR_LF_TERMINATION) ? 2 : 1;
+		bool truncate = false;
+		size_t echo_fragment_len = processed;
+
+		/* Check if echo should be truncated. */
+		if (echo_len + echo_fragment_len + (send ? 0 : terminator_len) >
+		    CONFIG_SM_AT_ECHO_MAX_LEN) {
+			truncate = true;
+			echo_fragment_len = CONFIG_SM_AT_ECHO_MAX_LEN - echo_len - terminator_len;
+		}
+
+		/* Echoing incomplete AT-command will cause
+		 * CONFIG_SM_URC_DELAY_WITH_INCOMPLETE_ECHO_MS delay in URCs after every
+		 * UART RX buffer (keystroke, when typing).
+		 */
+		incomplete_echo = !send;
+		(void)sm_at_send_internal(buf, echo_fragment_len, false, SM_DEBUG_PRINT_NONE);
+		echo_len += echo_fragment_len;
+
+		/* Send truncated termination characters.*/
+		if (send && truncate) {
+			if (IS_ENABLED(CONFIG_SM_CR_TERMINATION)) {
+				(void)sm_at_send_internal((uint8_t *)"\r", 1, false,
+							  SM_DEBUG_PRINT_NONE);
+			} else if (IS_ENABLED(CONFIG_SM_LF_TERMINATION)) {
+				(void)sm_at_send_internal((uint8_t *)"\n", 1, false,
+							  SM_DEBUG_PRINT_NONE);
+			} else {
+				(void)sm_at_send_internal((uint8_t *)"\r\n", 2, false,
+							  SM_DEBUG_PRINT_NONE);
+			}
+		}
+	}
+
 	if (send) {
 		if (at_cmd_len > sizeof(sm_at_buf) - 1) {
 			LOG_ERR("AT command buffer overflow, %d dropped", at_cmd_len);
@@ -612,6 +693,7 @@ static size_t cmd_rx_handler(const uint8_t *buf, const size_t len, bool *stop_at
 
 		inside_quotes = false;
 		at_cmd_len = 0;
+		echo_len = 0;
 	}
 
 	return processed;
@@ -694,20 +776,14 @@ AT_MONITOR(at_notify, ANY, notification_handler);
 
 static void notification_handler(const char *notification)
 {
-	if (get_sm_mode() == SM_AT_COMMAND_MODE) {
-
 #if defined(CONFIG_SM_PPP)
-		if (!sm_fwd_cgev_notifs
-		 && !strncmp(notification, "+CGEV: ", strlen("+CGEV: "))) {
-			/* CGEV notifications are silenced. Do not forward them. */
-			return;
-		}
-#endif
-		sm_at_send_internal(CRLF_STR, strlen(CRLF_STR), true);
-		sm_at_send_str(notification);
-	} else {
-		LOG_DBG("Drop notification: %s", notification);
+	if (!sm_fwd_cgev_notifs && !strncmp(notification, "+CGEV: ", strlen("+CGEV: "))) {
+		/* CGEV notifications are silenced. Do not forward them. */
+		return;
 	}
+#endif
+	sm_at_send_internal(CRLF_STR, strlen(CRLF_STR), true, SM_DEBUG_PRINT_FULL);
+	sm_at_send_internal(notification, strlen(notification), true, SM_DEBUG_PRINT_FULL);
 }
 
 void rsp_send_ok(void)
@@ -720,31 +796,46 @@ void rsp_send_error(void)
 	sm_at_send_str(ERROR_STR);
 }
 
-void rsp_send(const char *fmt, ...)
+static void rsp_send_internal(bool urc, const char *fmt, va_list arg_ptr)
 {
 	static K_MUTEX_DEFINE(mutex_rsp_buf);
 	static char rsp_buf[SM_AT_MAX_RSP_LEN];
-	va_list arg_ptr;
 	int rsp_len;
 
 	k_mutex_lock(&mutex_rsp_buf, K_FOREVER);
 
-	va_start(arg_ptr, fmt);
 	rsp_len = vsnprintf(rsp_buf, sizeof(rsp_buf), fmt, arg_ptr);
 	rsp_len = MIN(rsp_len, sizeof(rsp_buf) - 1);
-	va_end(arg_ptr);
 
-	sm_at_send_internal(rsp_buf, rsp_len, true);
+	sm_at_send_internal(rsp_buf, rsp_len, urc, SM_DEBUG_PRINT_FULL);
 
 	k_mutex_unlock(&mutex_rsp_buf);
 }
 
-void data_send(const uint8_t *data, size_t len)
+void rsp_send(const char *fmt, ...)
 {
-	sm_at_send_internal(data, len, false);
+	va_list arg_ptr;
+
+	va_start(arg_ptr, fmt);
+	rsp_send_internal(false, fmt, arg_ptr);
+	va_end(arg_ptr);
 }
 
-int enter_datamode(sm_datamode_handler_t handler)
+void urc_send(const char *fmt, ...)
+{
+	va_list arg_ptr;
+
+	va_start(arg_ptr, fmt);
+	rsp_send_internal(true, fmt, arg_ptr);
+	va_end(arg_ptr);
+}
+
+void data_send(const uint8_t *data, size_t len)
+{
+	sm_at_send_internal(data, len, false, SM_DEBUG_PRINT_SHORT);
+}
+
+int enter_datamode(sm_datamode_handler_t handler, size_t data_len)
 {
 	k_mutex_lock(&mutex_mode, K_FOREVER);
 
@@ -759,6 +850,7 @@ int enter_datamode(sm_datamode_handler_t handler)
 	k_mutex_unlock(&mutex_data);
 
 	datamode_handler = handler;
+	datamode_data_len = data_len;
 	if (sm_datamode_time_limit == 0) {
 		if (sm_uart_baudrate > 0) {
 			sm_datamode_time_limit = CONFIG_SM_UART_RX_BUF_SIZE * (8 + 1 + 1) * 1000 /
@@ -793,6 +885,7 @@ bool exit_datamode_handler(int result)
 		}
 		datamode_handler = NULL;
 		datamode_handler_result = result;
+		datamode_data_len = 0;
 		ret = true;
 	}
 
@@ -891,6 +984,9 @@ int sm_at_host_init(void)
 {
 	int err;
 
+	ring_buf_init(&urc_ctx.rb, sizeof(urc_ctx.buf), urc_ctx.buf);
+	k_mutex_init(&urc_ctx.mutex);
+
 	k_mutex_lock(&mutex_mode, K_FOREVER);
 	sm_datamode_time_limit = 0;
 	datamode_handler = NULL;
@@ -956,7 +1052,7 @@ int sm_at_host_power_off(void)
 
 	/* Write sync str to buffer so it is sent first when resuming, do not flush. */
 	if (!IS_ENABLED(CONFIG_SM_SKIP_READY_MSG)) {
-		sm_tx_write(SM_SYNC_STR, strlen(SM_SYNC_STR), false);
+		sm_tx_write(SM_SYNC_STR, strlen(SM_SYNC_STR), false, false, K_NO_WAIT);
 	}
 
 	return err;
@@ -972,9 +1068,45 @@ int sm_at_host_power_on(void)
 	}
 
 	/* Flush the TX buffer. */
-	sm_tx_write(NULL, 0, true);
+	sm_tx_write(NULL, 0, true, false, K_NO_WAIT);
 
 	return 0;
+}
+
+void sm_at_host_echo(bool enable)
+{
+	echo = enable;
+	incomplete_echo = false;
+}
+
+struct sm_urc_ctx *sm_at_host_urc_ctx_acquire(enum sm_urc_owner owner)
+{
+	k_mutex_lock(&urc_ctx.mutex, K_FOREVER);
+
+	if (urc_ctx.owner == SM_URC_OWNER_NONE || urc_ctx.owner == owner) {
+		urc_ctx.owner = owner;
+		k_mutex_unlock(&urc_ctx.mutex);
+		return &urc_ctx;
+	}
+
+	k_mutex_unlock(&urc_ctx.mutex);
+	return NULL;
+}
+
+void sm_at_host_urc_ctx_release(struct sm_urc_ctx *ctx, enum sm_urc_owner owner)
+{
+	if (ctx != &urc_ctx) {
+		LOG_ERR("Invalid URC context");
+		return;
+	}
+
+	k_mutex_lock(&ctx->mutex, K_FOREVER);
+
+	if (ctx->owner == owner) {
+		ctx->owner = SM_URC_OWNER_NONE;
+	}
+
+	k_mutex_unlock(&ctx->mutex);
 }
 
 void sm_at_host_uninit(void)

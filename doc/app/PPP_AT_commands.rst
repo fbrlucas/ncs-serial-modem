@@ -31,9 +31,8 @@ The set command allows you to start and stop PPP, and optionally define the PDN 
 
 .. note::
 
-   PPP is automatically started and stopped by |SM| when the PDN connection requested for PPP
-   is established and lost, respectively.
-   This happens even if PPP has previously been stopped or started with this command.
+   When a PPP start has been issued, the PPP connection is automatically activated and deactivated when the PDN connection requested for PPP is established and lost, respectively.
+   This will continue until a PPP stop is issued by either the user by the ``AT#XPPP=0`` command or by the remote peer disconnecting the PPP using LCP termination.
 
 Syntax
 ~~~~~~
@@ -77,43 +76,30 @@ PPP with default PDN connection:
 
 ::
 
-  AT+CFUN=1
-
-  OK
-
-  // PPP is automatically started when the default PDN is activated.
-  #XPPP: 1,0,0
-
-  // Stop PPP.
-  AT#XPPP=0
-
-  OK
-
-  #XPPP: 0,0
-
   // Start PPP.
   AT#XPPP=1
 
   OK
 
+  AT+CFUN=1
+
+  OK
+
+  // PPP is started and waits for a peer to connect.
   #XPPP: 1,0,0
 
-  // Have the peer connect to |SM|'s PPP.
+  // Peer connects to |SM|'s PPP.
   #XPPP: 1,1,0
 
   // Peer disconnects.
   #XPPP: 1,0,0
 
-  // |SM| restarts PPP automatically when peer disconnects.
+  // |SM| stops PPP when a peer disconnects.
   #XPPP: 0,0,0
-
-  #XPPP: 1,0,0
 
   AT+CFUN=4
 
   OK
-
-  #XPPP: 0,0
 
 PPP with non-default PDN connection:
 
@@ -125,8 +111,7 @@ PPP with non-default PDN connection:
 
   OK
 
-  // Start PPP with the created PDN connection. This must be before AT+CFUN=1 command or
-  // otherwise PPP will be started for the default PDN connection.
+  // Start PPP with the created PDN connection.
   AT#XPPP=1,1
 
   OK
@@ -141,8 +126,32 @@ PPP with non-default PDN connection:
   // PPP is automatically started when the PDN connection set for PPP has been activated.
   #XPPP: 1,0,1
 
-  // Have the peer connect to |SM|'s PPP.
+  // Peer connects to |SM|'s PPP.
   #XPPP: 1,1,1
+
+Connection recovery for network loss.
+This requires the PPP on the peer side to keep retrying or waiting for LCP Config-Requests.
+
+::
+
+  // Simulate connection loss by activating the flight mode.
+  AT+CFUN=4
+
+  OK
+
+  // PPP is automatically stopped when the PDN connection has been deactivated.
+  #XPPP: 0,0,0
+
+  // Reactivate the connection.
+  AT+CFUN=1
+
+  OK
+
+  // PPP is automatically restarted when the PDN connection has been reactivated.
+  #XPPP: 1,0,0
+
+  // Peer connects to |SM|'s PPP.
+  #XPPP: 1,1,0
 
 Read command
 ------------
@@ -172,8 +181,8 @@ If you are using CMUX, see :ref:`sm_as_linux_modem` for more information on sett
 
 For the process described here, |SM|'s UARTs must be connected to the Linux host.
 
-1. Get PPP running on |SM|.
-   To do this, start |SM| and issue an ``AT+CFUN=1`` command.
+1. Start PPP with the ``AT#XPPP=1`` command.
+#. Set modem to online mode with the ``AT+CFUN=1`` command.
 #. Wait for ``#XPPP: 1,0,0``, which is sent when the network registration succeeds and PPP has started successfully with the default PDN connection.
 #. Run the following command on the Linux host:
 
@@ -182,9 +191,9 @@ For the process described here, |SM|'s UARTs must be connected to the Linux host
       $ sudo pppd -detach <PPP_UART_dev> <baud_rate> noauth crtscts novj nodeflate nobsdcomp debug +ipv6 usepeerdns noipdefault defaultroute defaultroute6 ipv6cp-restart 5 ipcp-restart 5
 
    Replace ``<PPP_UART_dev>`` by the device file assigned to the PPP UART and ``<baud_rate>`` by the baud rate of the UART that PPP is using (which is set in the :file:`overlay-ppp-without-cmux.overlay` file).
-   Typically, when ``uart1`` is assigned to be the PPP UART (in the devicetree overlay), the device file assigned to it is :file:`/dev/ttyACM2` for an nRF9160 DK, and :file:`/dev/ttyACM1` for the other nRF91 Series DKs.
+   Typically, when ``uart1`` is assigned to be the PPP UART (in the devicetree overlay), the device file assigned to it is :file:`/dev/ttyACM1` for an nRF9151 DK.
 
-#. After the PPP link negotiation has completed successfully, a new network interface will be available, typically ``ppp0``.
+#. After the PPP link negotiation has completed successfully, |SM| will send ``#XPPP: 1,1,0`` notification over UART, and a new network interface will be available, typically ``ppp0``.
    This network interface will allow sending and receiving IP traffic through the modem of the nRF91 Series SiP running |SM|.
 
 .. note::

@@ -29,9 +29,23 @@
 #define SM_DATAMODE_FLAGS_EXIT_HANDLER (1 << 1)
 
 extern uint8_t sm_data_buf[SM_MAX_MESSAGE_SIZE];  /* For socket data. */
-extern uint8_t sm_at_buf[SM_AT_MAX_CMD_LEN + 1]; /* AT command buffer. */
+extern uint8_t sm_at_buf[CONFIG_SM_AT_BUF_SIZE + 1]; /* AT command buffer. */
 
 extern uint16_t sm_datamode_time_limit; /* Send trigger by time in data mode. */
+
+enum sm_urc_owner {
+	SM_URC_OWNER_NONE,
+	SM_URC_OWNER_AT,
+	SM_URC_OWNER_CMUX
+};
+
+/* Buffer for URC messages. */
+struct sm_urc_ctx {
+	struct ring_buf rb;
+	uint8_t buf[CONFIG_SM_URC_BUFFER_SIZE];
+	struct k_mutex mutex;
+	enum sm_urc_owner owner;
+};
 
 /** @brief Operations in data mode. */
 enum sm_datamode_operation {
@@ -101,6 +115,16 @@ void sm_at_host_uninit(void);
 void rsp_send(const char *fmt, ...);
 
 /**
+ * @brief Send URC message
+ *
+ * URC messages are queued and sent when possible.
+ *
+ * @param fmt URC message format string
+ *
+ */
+void urc_send(const char *fmt, ...);
+
+/**
  * @brief Send AT command response of OK
  */
 void rsp_send_ok(void);
@@ -125,11 +149,13 @@ void data_send(const uint8_t *data, size_t len);
  * No AT unsolicited message or command response allowed in data mode.
  *
  * @param handler Data mode handler provided by requesting module
+ * @param data_len Expected data length to be sent in data mode. 0 means unknown length and
+ *        that the termination command is required to exit the data mode.
  *
  * @retval 0 If the operation was successful.
  *         Otherwise, a (negative) error code is returned.
  */
-int enter_datamode(sm_datamode_handler_t handler);
+int enter_datamode(sm_datamode_handler_t handler, size_t data_len);
 
 /**
  * @brief Check whether Serial Modem AT host is in data mode
@@ -168,6 +194,29 @@ typedef int sm_at_callback(enum at_parser_cmd_type cmd_type, struct at_parser *p
  * @retval 0 on success.
  */
 int sm_at_cb_wrapper(char *buf, size_t len, char *at_cmd, sm_at_callback cb);
+
+/**
+ * @brief Enable or disable echo of received characters.
+ *
+ * @param enable True to enable echo, false to disable.
+ */
+void sm_at_host_echo(bool enable);
+
+/**
+ * @brief Acquire ownership of the URC context for a specific owner.
+ *
+ * If the context is unowned (NONE) or already owned by the given owner,
+ * set the owner and return the context pointer.
+ * Otherwise, return NULL.
+ */
+struct sm_urc_ctx *sm_at_host_urc_ctx_acquire(enum sm_urc_owner owner);
+
+/**
+ * @brief Release ownership of the URC context.
+ *
+ * Only releases if the current owner matches.
+ */
+void sm_at_host_urc_ctx_release(struct sm_urc_ctx *ctx, enum sm_urc_owner owner);
 
 /**
  * @brief Define a wrapper for a Serial Modem custom AT command callback.

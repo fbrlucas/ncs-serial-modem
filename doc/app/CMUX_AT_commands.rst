@@ -11,6 +11,8 @@ This page describes CMUX-related AT commands.
 
 The GSM 0710 multiplexer protocol (CMUX) enables multiplexing multiple data streams through a single serial link, setting up one channel per data stream.
 For example, it can be used to exchange AT data and have a :ref:`Point-to-Point Protocol (PPP) <CONFIG_SM_PPP>` link up at the same time on a single UART.
+|SM| implements the basic option of the CMUX protocol with only UIH frames as described in the `3GPP TS 27.010`_ specification.
+The maximum length of the information field in UIH frames is configurable using the ``CONFIG_MODEM_CMUX_MTU`` Kconfig option, which defaults to 127 bytes.
 
 .. note::
 
@@ -22,12 +24,13 @@ See the :ref:`sm_config_files` section for more information.
 
 .. note::
 
-   |SM| does not have an equivalent to the ``AT+CMUX`` command described in 3GPP TS 27.007.
+   |SM| does not have an equivalent to the ``AT+CMUX`` command described in `3GPP TS 27.007`_.
    Here is how |SM|'s implementation of CMUX relates to the standard command's parameters:
 
+   * Only basic mode (mode 0) is supported.
    * Only UIH frames are used.
    * The speed used is the configured baud rate of |SM|'s UART.
-   * The maximum frame size is configured using the ``CONFIG_MODEM_CMUX_MTU`` Kconfig option.
+   * No system parameters (N1, T1, T2, T3, k, m) are configurable.
 
 CMUX setup #XCMUX
 =================
@@ -38,6 +41,9 @@ Set command
 -----------
 
 The set command allows you to start CMUX and assign the CMUX channels.
+
+The CMUX link is closed down automatically when the remote end sends the CMUX Multiplexer Close Down (CLD) sequence.
+The CMUX link can be closed manually with the ``AT#XCMUXCLD`` command.
 
 Syntax
 ~~~~~~
@@ -131,3 +137,30 @@ With PPP:
    #XCMUX: 2,2
 
    OK
+
+CMUX close down #XCMUXCLD
+=========================
+
+The ``#XCMUXCLD`` command closes down the CMUX service.
+
+This command can be used on host devices that do not support sending the CMUX Multiplexer close-down sequence.
+Once CMUX is closed down, the serial link returns to AT command mode.
+
+Set command
+-----------
+
+The set command allows you to close down the CMUX link.
+
+Syntax
+~~~~~~
+
+::
+
+   AT#XCMUXCLD
+
+An ``OK`` response is sent in the CMUX channel if the command is accepted, after which CMUX is closed down.
+
+Read command
+------------
+
+The read command is not supported.

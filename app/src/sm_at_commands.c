@@ -32,29 +32,15 @@
 #include "sm_at_icmp.h"
 #include "sm_at_sms.h"
 #include "sm_at_fota.h"
-#if defined(CONFIG_SM_NATIVE_TLS)
-#include "sm_at_cmng.h"
-#endif
+#include "sm_version.h"
 #if defined(CONFIG_SM_NRF_CLOUD)
 #include "sm_at_nrfcloud.h"
 #endif
 #if defined(CONFIG_SM_GNSS)
 #include "sm_at_gnss.h"
 #endif
-#if defined(CONFIG_SM_FTPC)
-#include "sm_at_ftp.h"
-#endif
 #if defined(CONFIG_SM_MQTTC)
 #include "sm_at_mqtt.h"
-#endif
-#if defined(CONFIG_SM_HTTPC)
-#include "sm_at_httpc.h"
-#endif
-#if defined(CONFIG_SM_TWI)
-#include "sm_at_twi.h"
-#endif
-#if defined(CONFIG_SM_GPIO)
-#include "sm_at_gpio.h"
 #endif
 #if defined(CONFIG_SM_CARRIER)
 #include "sm_at_carrier.h"
@@ -96,28 +82,26 @@ bool sm_is_modem_functional_mode(enum lte_lc_func_mode mode)
 int sm_power_off_modem(void)
 {
 	/* "[...] there may be a delay until modem is disconnected from the network."
-	 * https://infocenter.nordicsemi.com/topic/ps_nrf9160/chapters/pmu/doc/operationmodes/system_off_mode.html
+	 * https://docs.nordicsemi.com/bundle/ps_nrf9151/page/chapters/pmu/doc/operationmodes/system_off_mode.html
 	 * This will return once the modem responds, which means it has actually stopped.
 	 * This has been observed to take between 1 and 2 seconds when it is not already stopped.
 	 */
 	return sm_util_at_printf("AT+CFUN=0");
 }
 
-SM_AT_CMD_CUSTOM(xslmver, "AT#XSLMVER", handle_at_slmver);
-static int handle_at_slmver(enum at_parser_cmd_type cmd_type, struct at_parser *, uint32_t)
+SM_AT_CMD_CUSTOM(xsmver, "AT#XSMVER", handle_at_smver);
+static int handle_at_smver(enum at_parser_cmd_type cmd_type, struct at_parser *, uint32_t)
 {
 	int ret = -EINVAL;
 
 	if (cmd_type == AT_PARSER_CMD_TYPE_SET) {
-		char *libmodem = nrf_modem_build_version();
-
 		if (strlen(CONFIG_SM_CUSTOMER_VERSION) > 0) {
-			rsp_send("\r\n#XSLMVER: %s,\"%s\",\"%s\"\r\n",
-				 STRINGIFY(NCS_VERSION_STRING), libmodem,
+			rsp_send("\r\n#XSMVER: %s,%s,\"%s\"\r\n",
+				 STRINGIFY(SM_VERSION), STRINGIFY(NCS_VERSION_STRING),
 				 CONFIG_SM_CUSTOMER_VERSION);
 		} else {
-			rsp_send("\r\n#XSLMVER: %s,\"%s\"\r\n",
-				 STRINGIFY(NCS_VERSION_STRING), libmodem);
+			rsp_send("\r\n#XSMVER: %s,%s\r\n",
+				 STRINGIFY(SM_VERSION), STRINGIFY(NCS_VERSION_STRING));
 		}
 		ret = 0;
 	}
@@ -155,7 +139,8 @@ static int handle_at_sleep(enum at_parser_cmd_type cmd_type, struct at_parser *p
 		}
 		if (sleep_control.mode == SLEEP_MODE_DEEP ||
 		    sleep_control.mode == SLEEP_MODE_IDLE) {
-			k_work_reschedule(&sleep_control.work, SM_UART_RESPONSE_DELAY);
+			k_work_reschedule_for_queue(&sm_work_q, &sleep_control.work,
+						    SM_UART_RESPONSE_DELAY);
 		} else {
 			ret = -EINVAL;
 		}
@@ -173,7 +158,7 @@ static void final_call(void (*func)(void))
 	static struct k_work_delayable worker;
 
 	k_work_init_delayable(&worker, (k_work_handler_t)func);
-	k_work_schedule(&worker, SM_UART_RESPONSE_DELAY);
+	k_work_schedule_for_queue(&sm_work_q, &worker, SM_UART_RESPONSE_DELAY);
 }
 
 static void sm_shutdown(void)
@@ -339,9 +324,12 @@ static int handle_at_clac(enum at_parser_cmd_type cmd_type, struct at_parser *, 
 	memset(base_cmd_len, 0, cmd_custom_count * sizeof(size_t));
 	rsp_send("\r\n");
 	for (size_t i = 0; i < cmd_custom_count; i++) {
-		/* Serial Modem at commands start with AT#X. */
-		if (strncasecmp(_nrf_modem_at_cmd_custom_list_start[i].cmd, "AT#X",
-				strlen("AT#X"))) {
+		const char *cmd = _nrf_modem_at_cmd_custom_list_start[i].cmd;
+		/* Modem AT comamands start with 'AT+' or AT%. Other commands are
+		 * Serial Modem specific'. Skip modem AT commands.
+		 */
+		if (strncasecmp(cmd, "AT+", strlen("AT+")) == 0 ||
+		    strncasecmp(cmd, "AT%%", strlen("AT%%")) == 0) {
 			continue;
 		}
 		/* List commands without operations and list each command only once. */
@@ -350,7 +338,7 @@ static int handle_at_clac(enum at_parser_cmd_type cmd_type, struct at_parser *, 
 
 		for (size_t j = 0; j < i; j++) {
 			/* Compare length and command as we have AT commands such as
-			 * AT#XSEND/AT#XSENDTO, AT#XFTP="whatever"
+			 * AT#XSEND/AT#XSENDTO, AT#XBIND="whatever"
 			 * and AT#XNRFCLOUD[=?]/AT#XNRFCLOUDPOS.
 			 */
 			if ((base_cmd_len[i] == base_cmd_len[j]) &&
@@ -371,6 +359,22 @@ static int handle_at_clac(enum at_parser_cmd_type cmd_type, struct at_parser *, 
 	return 0;
 }
 
+SM_AT_CMD_CUSTOM(ate0, "ATE0", handle_ate0);
+static int handle_ate0(enum at_parser_cmd_type cmd_type, struct at_parser *, uint32_t)
+{
+	sm_at_host_echo(false);
+
+	return 0;
+}
+
+SM_AT_CMD_CUSTOM(ate1, "ATE1", handle_ate1);
+static int handle_ate1(enum at_parser_cmd_type cmd_type, struct at_parser *, uint32_t)
+{
+	sm_at_host_echo(true);
+
+	return 0;
+}
+
 int sm_at_init(void)
 {
 	int err;
@@ -379,12 +383,12 @@ int sm_at_init(void)
 
 	err = sm_at_tcp_proxy_init();
 	if (err) {
-		LOG_ERR("%s initialization failed (%d).", "TCP Server", err);
+		LOG_ERR("%s initialization failed (%d).", "TCP client", err);
 		return -EFAULT;
 	}
 	err = sm_at_udp_proxy_init();
 	if (err) {
-		LOG_ERR("%s initialization failed (%d).", "UDP Server", err);
+		LOG_ERR("%s initialization failed (%d).", "UDP client", err);
 		return -EFAULT;
 	}
 	err = sm_at_socket_init();
@@ -426,38 +430,10 @@ int sm_at_init(void)
 		return -EFAULT;
 	}
 #endif
-#if defined(CONFIG_SM_FTPC)
-	err = sm_at_ftp_init();
-	if (err) {
-		LOG_ERR("%s initialization failed (%d).", "FTP", err);
-		return -EFAULT;
-	}
-#endif
 #if defined(CONFIG_SM_MQTTC)
 	err = sm_at_mqtt_init();
 	if (err) {
 		LOG_ERR("%s initialization failed (%d).", "MQTT", err);
-		return -EFAULT;
-	}
-#endif
-#if defined(CONFIG_SM_HTTPC)
-	err = sm_at_httpc_init();
-	if (err) {
-		LOG_ERR("%s initialization failed (%d).", "HTTP", err);
-		return -EFAULT;
-	}
-#endif
-#if defined(CONFIG_SM_GPIO)
-	err = sm_at_gpio_init();
-	if (err) {
-		LOG_ERR("%s initialization failed (%d).", "GPIO", err);
-		return -EFAULT;
-	}
-#endif
-#if defined(CONFIG_SM_TWI)
-	err = sm_at_twi_init();
-	if (err) {
-		LOG_ERR("%s initialization failed (%d).", "TWI", err);
 		return -EFAULT;
 	}
 #endif
@@ -494,11 +470,11 @@ void sm_at_uninit(void)
 
 	err = sm_at_tcp_proxy_uninit();
 	if (err) {
-		LOG_WRN("%s uninitialization failed (%d).", "TCP Server", err);
+		LOG_WRN("%s uninitialization failed (%d).", "TCP client", err);
 	}
 	err = sm_at_udp_proxy_uninit();
 	if (err) {
-		LOG_WRN("%s uninitialization failed (%d).", "UDP Server", err);
+		LOG_WRN("%s uninitialization failed (%d).", "UDP client", err);
 	}
 	err = sm_at_socket_uninit();
 	if (err) {
@@ -530,34 +506,10 @@ void sm_at_uninit(void)
 		LOG_WRN("%s uninitialization failed (%d).", "GNSS", err);
 	}
 #endif
-#if defined(CONFIG_SM_FTPC)
-	err = sm_at_ftp_uninit();
-	if (err) {
-		LOG_WRN("%s uninitialization failed (%d).", "FTP", err);
-	}
-#endif
 #if defined(CONFIG_SM_MQTTC)
 	err = sm_at_mqtt_uninit();
 	if (err) {
 		LOG_WRN("%s uninitialization failed (%d).", "MQTT", err);
-	}
-#endif
-#if defined(CONFIG_SM_HTTPC)
-	err = sm_at_httpc_uninit();
-	if (err) {
-		LOG_WRN("%s uninitialization failed (%d).", "HTTP", err);
-	}
-#endif
-#if defined(CONFIG_SM_TWI)
-	err = sm_at_twi_uninit();
-	if (err) {
-		LOG_WRN("%s uninitialization failed (%d).", "TWI", err);
-	}
-#endif
-#if defined(CONFIG_SM_GPIO)
-	err = sm_at_gpio_uninit();
-	if (err) {
-		LOG_WRN("%s uninitialization failed (%d).", "GPIO", err);
 	}
 #endif
 #if defined(CONFIG_SM_CARRIER)

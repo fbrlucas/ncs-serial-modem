@@ -10,7 +10,7 @@ DTR UART driver
 The DTR UART driver implements the standard *asynchronous UART API* for the Data Communication Equipment (DCE) (also known as modem) with Data Terminal Ready (DTR) and Ring Indicator (RI) signals.
 
 Another device, Data Terminal Equipment (DTE) (also known as host), controls the power state of the DTR UART by asserting and deasserting the DTR signal.
-The :ref:`lib_sm_host` gives an example of DTE implementation.
+The :ref:`lib_sm_at_client` gives an example of DTE implementation.
 
 When the DTE, is ready to communicate with DCE, it asserts the DTR signal.
 This causes the DTR UART driver to resume the UART peripheral, RX, and TX operations.
@@ -21,7 +21,7 @@ This causes the DTR UART driver to stop the RX and TX operations and disable the
 When the DCE has data to be read by the DTE, it asserts the RI signal for a short period of time.
 The DTE can then assert the DTR signal to resume the UART peripheral and read the data.
 
-Application Integration
+Application integration
 ***********************
 
 When the DTR signal is deasserted:
@@ -40,7 +40,7 @@ When the DTR signal is asserted:
   The application must provide a new RX buffer by calling the :c:func:`uart_rx_buf_rsp` function.
 * The application will be able to send and receive UART data as normal.
 
-Power Management
+Power management
 ----------------
 
 With Device Power Management enabled with the ``CONFIG_PM_DEVICE`` Kconfig option, the DTR UART driver can be suspended and resumed from the application using the :c:func:`pm_device_action_run` function.
@@ -65,7 +65,7 @@ See the configuration example from :file:`app/overlay-external-mcu.overlay`::
       dtr_uart2: dtr-uart {
          compatible = "nordic,dtr-uart";
          dtr-gpios = <&gpio0 31 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
-         ri-gpios = <&gpio0 30 GPIO_ACTIVE_HIGH>;
+         ri-gpios = <&gpio0 30 GPIO_ACTIVE_LOW>;
          status = "okay";
       };
       pinctrl-0 = <&uart2_default_alt>;
