@@ -7,7 +7,7 @@
    :local:
    :depth: 2
 
-The |SM| AT Client library exposes the AT command interface of the :ref:`Serial Modem <sm_description>` application for external devices over a serial interface.
+The |SM| AT Client library exposes the AT command interface of the :ref:`serial_modem_app` for external devices over a serial interface.
 This library is intended for applications running on an external MCU that are connected to an nRF91 Series SiP through UART.
 
 Overview
@@ -21,7 +21,7 @@ The |SM| AT Client library allows you to perform the following functions:
   Refer to :ref:`sm_data_mode`.
 * Manage the UART power state of the host.
 * Manage the UART power state of the |SM| with DTR (Data Terminal Ready) and RI (Ring Indicator) pins.
-  See :ref:`sm_dtr_ri` for more information.
+  See :ref:`uart_configuration` for more information.
 * Monitor AT notifications with registered callbacks, similar to the `AT monitor`_ library.
 * Send AT commands through UART or RTT shell, similar to the `AT shell`_ library.
 

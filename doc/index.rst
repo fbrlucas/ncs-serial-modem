@@ -13,8 +13,8 @@ It includes host examples in the form of the |SM| AT Client library and the |SM|
 
    gsg_guide
    app/README
-   samples/sm_at_client_shell
-   drivers/dtr_uart
-   lib/sm_at_client
+   app/at_commands
+   uart_configuration
+   samples/README
    migration_notes
    release_notes

@@ -15,11 +15,6 @@
 .. _`Thingy91X`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/app_dev/device_guides/thingy91x/index.html#ug-thingy91x
 .. _`nRF91 DK`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/app_dev/device_guides/nrf91/index.html#ug-nrf91
 .. _`nrf9151dk`: https://docs.nordicsemi.com/bundle/ncs-latest/page/zephyr/boards/nordic/nrf9151dk/doc/index.html#nrf9151dk
-.. _`nRF7002dk`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/app_dev/device_guides/nrf70/index.html#ug-nrf70-developing
-.. _`nRF5340 DK`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/app_dev/device_guides/nrf53/index.html#ug-nrf5340
-.. _`nrf5340dk`: https://docs.nordicsemi.com/bundle/ncs-latest/page/zephyr/boards/nordic/nrf5340dk/doc/index.html#nrf5340dk
-.. _`nRF52840_DK`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/app_dev/device_guides/nrf52/index.html#ug-nrf52
-.. _`nrf52840dk`: https://docs.nordicsemi.com/bundle/ncs-latest/page/zephyr/boards/nordic/nrf52840dk/doc/index.html#nrf52840dk
 .. _`nRF9151 Product Specification`: https://docs.nordicsemi.com/bundle/ps_nrf9151/page/nRF9151_html5_keyfeatures.html
 .. _`Thingy91x_firmware_update`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/app_dev/device_guides/thingy91x/thingy91x_updating_fw_programmer.html#updating_the_firmware_on_the_nrf5340_soc
 .. _`shared TF-M logging`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/app_dev/device_guides/nrf91/nrf91_snippet.html#tfm-enable-share-uart
@@ -39,6 +34,7 @@
 
 .. _`ug_tfm_security_by_separation`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/security/tfm/processing_environments.html#ug-tfm-security-by-separation
 .. _`ug_tfm`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/security/tfm/index.html#ug-tfm
+.. _`TF-M`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/security/tfm/processing_environments.html#app-boards-spe-nspe
 
 .. _`Serial LTE modem`: https://docs.nordicsemi.com/bundle/ncs-3.1.1/page/nrf/applications/serial_lte_modem/README.html
 .. _`LwM2M carrier`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/libraries/bin/lwm2m_carrier/index.html#liblwm2m-carrier-readme
@@ -72,7 +68,7 @@
 .. _`nrfxlib_dtls_cid_settings`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrfxlib/nrf_modem/doc/sockets/socket_options_func.html#dtls-cid-setting
 .. _`nrfxlib_dtls_cid_status`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrfxlib/nrf_modem/doc/sockets/socket_options_func.html#dtls-cid-status
 
-.. _`nRF Cloud Preconnect Provisioning`: https://docs.nordicsemi.com/bundle/nrf-cloud/page/Devices/Associations/Onboarding.html#preconnect-onboarding
+.. _`nRF Cloud Preconnect onboarding`: https://docs.nordicsemi.com/bundle/nrf-cloud/page/Devices/Associations/Onboarding.html#preconnect-onboarding
 
 .. _`Memfault library`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/libraries/debug/memfault_ncs.html#mod-memfault
 .. _`modem trace UART snippet`: https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/app_dev/device_guides/nrf91/nrf91_snippet.html#nrf91-modem-trace-uart-snippet
@@ -81,6 +77,14 @@
 .. _`Cellular Monitor app`: https://docs.nordicsemi.com/bundle/nrf-connect-cellularmonitor/page/index.html
 .. _`Serial Terminal app`: https://docs.nordicsemi.com/bundle/nrf-connect-serial-terminal/page/index.html
 .. _`Board Configurator app`: https://docs.nordicsemi.com/bundle/nrf-connect-board-configurator/page/index.html
+
+.. ### docs.zephyrproject.org/
+
+.. _`Zephyr Networking`: https://docs.zephyrproject.org/latest/connectivity/networking/index.html
+.. _`Zephyr Network APIs`: https://docs.zephyrproject.org/latest/connectivity/networking/api/apis.html
+.. _`Zephyr Modem modules`: https://docs.zephyrproject.org/latest/services/modem/index.html
+.. _`zperf: Network Traffic Generator`: https://docs.zephyrproject.org/latest/connectivity/networking/api/zperf.html
+.. _`Zephyr CMUX Power Saving`: https://docs.zephyrproject.org/latest/services/modem/index.html#cmux-power-saving
 
 .. ### github.com
 
@@ -91,7 +95,6 @@
 .. ### others
 
 .. _`Private addresses`: https://en.wikipedia.org/wiki/IP_address#Private_addresses
-.. _`Zephyr Network APIs`: https://docs.zephyrproject.org/latest/connectivity/networking/api/apis.html#network-apis
 
 .. _`3GPP TS 27.010`: https://www.etsi.org/deliver/etsi_ts/127000_127099/127010/18.00.00_60/ts_127010v180000p.pdf
 .. _`3GPP TS 27.007`: https://www.etsi.org/deliver/etsi_ts/127000_127099/127007/18.06.00_60/ts_127007v180600p.pdf

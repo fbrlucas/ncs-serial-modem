@@ -26,8 +26,6 @@
 #include "sm_ctrl_pin.h"
 #include "sm_settings.h"
 #include "sm_at_host.h"
-#include "sm_at_tcp_proxy.h"
-#include "sm_at_udp_proxy.h"
 #include "sm_at_socket.h"
 #include "sm_at_icmp.h"
 #include "sm_at_sms.h"
@@ -152,7 +150,7 @@ static int handle_at_sleep(enum at_parser_cmd_type cmd_type, struct at_parser *p
 	return ret;
 }
 
-static void final_call(void (*func)(void))
+void final_call(void (*func)(void))
 {
 	/* Delegate the final call to a worker so that the "OK" response is properly sent. */
 	static struct k_work_delayable worker;
@@ -381,16 +379,6 @@ int sm_at_init(void)
 
 	k_work_init_delayable(&sleep_control.work, go_sleep_wk);
 
-	err = sm_at_tcp_proxy_init();
-	if (err) {
-		LOG_ERR("%s initialization failed (%d).", "TCP client", err);
-		return -EFAULT;
-	}
-	err = sm_at_udp_proxy_init();
-	if (err) {
-		LOG_ERR("%s initialization failed (%d).", "UDP client", err);
-		return -EFAULT;
-	}
 	err = sm_at_socket_init();
 	if (err) {
 		LOG_ERR("%s initialization failed (%d).", "Socket", err);
@@ -454,13 +442,6 @@ int sm_at_init(void)
 #if defined(CONFIG_SM_CMUX)
 	sm_cmux_init();
 #endif
-#if defined(CONFIG_SM_PPP)
-	err = sm_ppp_init();
-	if (err) {
-		LOG_ERR("%s initialization failed (%d).", "PPP", err);
-		return err;
-	}
-#endif
 	return err;
 }
 
@@ -468,14 +449,6 @@ void sm_at_uninit(void)
 {
 	int err;
 
-	err = sm_at_tcp_proxy_uninit();
-	if (err) {
-		LOG_WRN("%s uninitialization failed (%d).", "TCP client", err);
-	}
-	err = sm_at_udp_proxy_uninit();
-	if (err) {
-		LOG_WRN("%s uninitialization failed (%d).", "UDP client", err);
-	}
 	err = sm_at_socket_uninit();
 	if (err) {
 		LOG_WRN("%s uninitialization failed (%d).", "Socket", err);

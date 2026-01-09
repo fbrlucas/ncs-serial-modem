@@ -92,6 +92,14 @@ size_t sm_at_receive(const uint8_t *data, size_t len, bool *stop_at_receive);
 int sm_at_host_init(void);
 
 /**
+ * @brief Initialize AT host for bootloader mode
+ *
+ * @retval 0 If the operation was successful.
+ *           Otherwise, a (negative) error code is returned.
+ */
+int sm_at_host_bootloader_init(void);
+
+/**
  * @brief Powers the UART down.
  *
  * @retval 0 on success, or a (negative) error code.
@@ -165,6 +173,13 @@ int enter_datamode(sm_datamode_handler_t handler, size_t data_len);
 bool in_datamode(void);
 
 /**
+ * @brief Check whether Serial Modem AT host is in AT command mode
+ *
+ * @retval true if yes, false if no.
+ */
+bool in_at_mode(void);
+
+/**
  * @brief Exit the data mode handler
  *
  * Remove the callback to the data mode handler and start dropping the incoming data, until
@@ -201,6 +216,33 @@ int sm_at_cb_wrapper(char *buf, size_t len, char *at_cmd, sm_at_callback cb);
  * @param enable True to enable echo, false to disable.
  */
 void sm_at_host_echo(bool enable);
+
+/**
+ * @brief Check whether echo URC delay is in progress.
+ *
+ * @retval true if echo URC delay is in progress, false otherwise.
+ */
+bool sm_at_host_echo_urc_delay(void);
+
+/** @brief Events which can be notified by the AT host. */
+enum sm_event {
+	SM_EVENT_URC = 0x01,     /**< URC can be sent. */
+	SM_EVENT_AT_MODE = 0x02, /**< Entered AT command mode. */
+};
+
+/** @brief Event callback structure. */
+struct sm_event_callback {
+	sys_snode_t node;
+	void (*cb)(struct k_work *work);
+	enum sm_event events;
+};
+
+/**
+ * @brief Register an event callback to be notified when the specified event occurs.
+ * @param cb Pointer to the event callback structure.
+ * @param event Event to register for.
+ */
+void sm_at_host_register_event_cb(struct sm_event_callback *cb, enum sm_event event);
 
 /**
  * @brief Acquire ownership of the URC context for a specific owner.

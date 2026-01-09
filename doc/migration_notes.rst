@@ -85,7 +85,7 @@ The |SM| application uses DTR (Data Terminal Ready) and RI (Ring Indicator) pins
   * DTR pin, which is a level based input, that is configured in the devicetree with the ``dtr-gpios`` property.
   * RI pin, which is a pulse based output, that is configured in the devicetree with the ``ri-gpios`` property.
 
-See :ref:`sm_dtr_ri` for more information on how DTR and RI pins work in the |SM| application.
+See :ref:`uart_configuration` for more information on how DTR and RI pins work in the |SM| application.
 See :ref:`sm_as_zephyr_modem` for information on how to configure DTR and RI pins when using the |SM| application as a Zephyr modem.
 
 Socket AT command changes
@@ -169,6 +169,16 @@ Here is the list of changes:
        * ``0`` - Binary mode. Data received as binary data.
        * ``1`` - Hex string mode. Data received as hexadecimal string representation.
 
+   * ``AT#XAPOLL`` parameter changes:
+
+     Added ``<handle>`` as the first parameter to the ``AT#XAPOLL`` command.
+     If a handle is provided, the operation applies only to that specific socket.
+     If no handle is provided, operation applies to all open sockets.
+     Removed support for multiple socket handles in a single command.
+
+     * Old syntax: ``AT#XAPOLL=<op>[,<events>[,<handle1>[,<handle2> ...<handle8>]``
+     * New syntax: ``AT#XAPOLL=[<handle>],<op>[,<events>]``
+
    * Other socket operations now require handle parameter:
 
      * ``AT#XSOCKETOPT=<handle>,<op>,<name>[,<value>]`` (handle parameter added)
@@ -220,9 +230,157 @@ This section lists features that have been removed from the |SM| compared to the
 If you need any of those features with this |SM|, please contact customer support and describe your use case.
 Removed features:
 
-   * Board support for the following chipsets: ``nrf9161dk/nrf9161/ns``, ``nrf9160dk/nrf9160/ns``, ``thingy91/nrf9160/ns`` and ``nrf9131ek/nrf9131/ns``.
-     * Use ``nrf9151dk/nrf9151/ns`` instead.
+   * Support for the ``nrf9161dk``, ``nrf9160dk``, ``thingy91``, and ``nrf9131ek`` boards.
+
+     * Use ``nrf9151dk`` instead.
+
+   * Support for the ``nrf5340dk``, ``nrf52840dk``, and ``nrf7002dk`` boards from the :ref:`sm_at_client_shell_sample`.
+
+     * Use ``nrf54l15dk`` instead.
+
    * Native TLS support including ``overlay-native_tls.conf``.
+
+   * TCP and UDP clients.
+     This includes the removal of the following AT commands:
+
+      * ``AT#XTCPCLI``
+      * ``AT#XTCPSEND``
+      * ``AT#XUDPCLI``
+      * ``AT#XUDPSEND``
+
+      The following URC notifications have also been removed:
+
+      * ``#XTCPDATA``
+      * ``#XUDPDATA``
+
+      You can replace this functionality by using the socket AT commands.
+
+      Migration examples:
+
+        * TCP IPv4 client
+
+          |NCS| SLM approach:
+
+          .. code-block::
+
+             AT#XTCPCLI=1,"test.server.com",1234
+
+             #XTCPCLI: 0,"connected"
+
+             OK
+
+             AT#XTCPSEND="echo this"
+
+             #XTCPSEND: 9
+
+             OK
+
+             #XTCPDATA: 9
+             echo this
+
+             AT#XTCPCLI=0
+
+             OK
+
+             #XTCPCLI: 0,"disconnected"
+
+          |SM| approach:
+
+          .. code-block::
+
+             AT#XSOCKET=1,1,0
+
+             #XSOCKET: 0,1,6
+
+             OK
+
+             AT#XRECVCFG=0,3
+
+             OK
+
+             AT#XCONNECT=0,"test.server.com",1234
+
+             #XCONNECT: 0,1
+
+             OK
+
+             AT#XSEND=0,0,0,"echo this"
+
+             #XSEND: 0,0,9
+
+             OK
+
+             #XRECV: 0,0,9
+             echo this
+
+             AT#XCLOSE
+
+             #XCLOSE: 0,0
+
+             OK
+
+        * DTLS IPv6 client
+
+          |NCS| SLM approach:
+
+          .. code-block::
+
+             AT#XUDPCLI=2,"test.server.com",1235,1000
+
+             #XUDPCLI: 0,"connected"
+
+             OK
+
+             AT#XUDPSEND="echo this"
+
+             #XUDPSEND: 9
+
+             OK
+
+             #XUDPDATA: 9,"::",0
+             echo this
+
+             AT#XUDPCLI=0
+
+             OK
+
+          |SM| approach:
+
+          .. code-block::
+
+             AT#XSSOCKET=2,2,0,1000
+
+             #XSSOCKET: 0,2,273
+
+             OK
+
+             AT#XRECVCFG=0,3
+
+             OK
+
+             AT#XCONNECT=0,"test.server.com",1235
+
+             #XCONNECT: 0,1
+
+             OK
+
+             AT#XSEND=0,0,0,"echo this"
+
+             #XSEND: 0,0,9
+
+             OK
+
+             #XRECV: 0,0,9
+             echo this
+
+             AT#XCLOSE=0
+
+             #XCLOSE: 0,0
+
+             OK
+
+        You can set the parameters such as ``<hostname_verify>`` and ``<use_dtls_cid>`` using the ``AT#XSSOCKETOPT`` command.
+
    * TCP and UDP servers.
      This includes the removal of the following AT commands:
 
@@ -235,6 +393,7 @@ Removed features:
      There is no direct replacement for these commands.
 
      In addition, the ``AT_SO_TCP_SRV_SESSTIMEO`` socket option has been removed.
+
    * HTTP client functionality including ``AT#XHTTPCCON`` and ``AT#XHTTPCREQ`` commands, and ``#XHTTPCRSP`` notification.
    * FTP and TFTP clients including ``AT#XFTP`` and ``AT#XTFTP`` commands.
    * ``#XGPIO`` AT command.
